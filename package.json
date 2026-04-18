@@ -1,0 +1,46 @@
+{
+  "name": "@wincorp/brokk",
+  "version": "0.1.0",
+  "description": "Brokk — module partagé builder paie/factures Fulll (Yggdrasil). Consommé par wincorp-thor (worker) et wincorp-bifrost (API session correction).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "wincorp",
+    "fulll",
+    "comptabilite",
+    "builder",
+    "tva"
+  ],
+  "author": "Tan Phi HUYNH <tanfeuille@gmail.com>",
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tanfeuille/wincorp-brokk.git"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.2",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
