@@ -1,4 +1,4 @@
-# @wincorp/brokk
+# @tanfeuille/brokk
 
 **Brokk** — module partagé builder paie/factures Fulll (écosystème Yggdrasil).
 
@@ -17,12 +17,12 @@ Dans le projet consommateur :
 
 ```bash
 # .npmrc (racine du projet)
-@wincorp:registry=https://npm.pkg.github.com
+@tanfeuille:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${NPM_TOKEN}
 ```
 
 ```bash
-npm install @wincorp/brokk
+npm install @tanfeuille/brokk
 ```
 
 Le token `NPM_TOKEN` doit avoir le scope `read:packages` (Vercel env var ou secret GitHub Actions).
@@ -43,7 +43,7 @@ import {
   parseExtraction,
   parseDecision,
   parseResultatBuilder,
-} from "@wincorp/brokk";
+} from "@tanfeuille/brokk";
 
 import type {
   ProfilDossier,
@@ -59,7 +59,7 @@ import type {
   ContextDecideur,
   IndicesContext,
   ExtractionLigne,
-} from "@wincorp/brokk";
+} from "@tanfeuille/brokk";
 ```
 
 ## Développement

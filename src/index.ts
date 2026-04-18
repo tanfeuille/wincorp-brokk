@@ -1,5 +1,5 @@
 /**
- * @wincorp/brokk — exports publics.
+ * @tanfeuille/brokk — exports publics (namespace GitHub Packages pour user tanfeuille).
  *
  * Module partagé builder paie/factures Fulll (écosystème Yggdrasil).
  * Consommé par wincorp-thor (worker) et wincorp-bifrost (API session correction).
