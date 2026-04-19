@@ -177,6 +177,66 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
     ).toBe(true);
   });
 
+  it("Phase 4.5 recover : SFR avec lignes remise négatives → équilibre OK (pas ERR-BUILD-03)", () => {
+    // Cas réel SFR Mobile (smoke SOAD 19/04 PM) :
+    // - Forfait 150 Go 5G : +45.98 € HT (ligne positive)
+    // - Offre fidélité : -5.00 € HT (remise commerciale)
+    // - Remise Multi : -8.00 € HT (remise commerciale)
+    // Net HT = 32.98 € — TVA 20% = 6.60 € — TTC = 39.58 €
+    // (NB ratios cohérents pour test, valeurs simplifiées)
+    // Avant fix : filter(montant_ht > 0) excluait les remises → HT agrégé
+    // = 45.98 (forfait seul) au lieu de 32.98 → delta +22 € → ERR-BUILD-03.
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "SFR", pays: "FR", vat: "FR71343059564" },
+        numero_piece: "B226-003564061",
+        montant_ht_total: 32.98,
+        montant_ttc_total: 39.58,
+        lignes_tva: [{ taux: 20, base_ht: 32.98, montant_tva: 6.60 }],
+        lignes: [
+          { libelle: "Forfait 150 Go 5G", montant_ht: 45.98, taux_tva: 20, montant_ttc: 55.18 },
+          { libelle: "Offre fidélité", montant_ht: -5.00, taux_tva: 20, montant_ttc: -6.00 },
+          { libelle: "Remise Multi", montant_ht: -8.00, taux_tva: 20, montant_ttc: -9.60 },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "62620000",
+        libelle_ecriture: "SFR Forfait 150 Go 5G",
+        fournisseur_fulll: "FSFR",
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "62620000": "R_62620000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.payload).toBeDefined();
+    expect(resultat.payload!.header.credit).toBe(39.58);
+    // Ligne charge : HT agrégé = 32.98 (45.98 - 5 - 8)
+    const ligneCharge = resultat.payload!.body.find(
+      (l) => l.account === "R_62620000",
+    );
+    expect(ligneCharge).toBeDefined();
+    expect(ligneCharge!.debit).toBe(32.98);
+    // TVA déductible : 32.98 × 20% = 6.60 €
+    const ligneTva = resultat.payload!.body.find(
+      (l) => l.account === "R_44566000",
+    );
+    expect(ligneTva).toBeDefined();
+    expect(ligneTva!.debit).toBe(6.60);
+    // Equilibre : sum(débit) = header.credit
+    const sumDebit = resultat.payload!.body.reduce(
+      (s, l) => s + (l.debit ?? 0),
+      0,
+    );
+    expect(Math.round(sumDebit * 100) / 100).toBe(39.58);
+  });
+
   it("péage VINCI 19 € : payload FR équilibré", () => {
     const resultat = construirePayloadV2({
       facture: factureMinimale(),

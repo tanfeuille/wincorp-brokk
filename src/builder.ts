@@ -300,8 +300,14 @@ function calculerLignesTvaAgregees(params: {
   } = params;
 
   const lignesCharge: PurchaseFormInput["body"] = [];
+  // Phase 4.5 recover (19/04/2026) : on inclut les lignes négatives (remises
+  // commerciales sur factures positives, ex SFR "Promotion Fibre -4.46€") pour
+  // qu'elles soient soustraites lors de l'agrégation HT par taux. Avant ce
+  // fix : `l.montant_ht > 0` excluait les remises → HT agrégé surévalué →
+  // ERR-BUILD-03 systématique sur factures télécom multi-lignes (delta +22€
+  // observé sur smoke SOAD 19:38).
   const lignesNonVides = lignesExtraction.filter(
-    (l) => typeof l.montant_ht === "number" && l.montant_ht > 0,
+    (l) => typeof l.montant_ht === "number" && l.montant_ht !== 0,
   );
   const libelleCharge = fournisseurNom || "Charge";
   const isFranchise =
