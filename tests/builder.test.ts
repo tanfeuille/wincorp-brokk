@@ -177,27 +177,30 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
     ).toBe(true);
   });
 
-  it("Phase 4.5 recover : SFR avec lignes remise négatives → équilibre OK (pas ERR-BUILD-03)", () => {
-    // Cas réel SFR Mobile (smoke SOAD 19/04 PM) :
-    // - Forfait 150 Go 5G : +45.98 € HT (ligne positive)
-    // - Offre fidélité : -5.00 € HT (remise commerciale)
-    // - Remise Multi : -8.00 € HT (remise commerciale)
-    // Net HT = 32.98 € — TVA 20% = 6.60 € — TTC = 39.58 €
-    // (NB ratios cohérents pour test, valeurs simplifiées)
-    // Avant fix : filter(montant_ht > 0) excluait les remises → HT agrégé
-    // = 45.98 (forfait seul) au lieu de 32.98 → delta +22 € → ERR-BUILD-03.
+  it("Phase 4.6 recover : SFR avec lignes_tva Vision priorisées sur lignes (TTC mal lus)", () => {
+    // Cas RÉEL SFR Mobile (smoke SOAD 19/04 PM, validé avec PDF user) :
+    // Détail facture liste les TTC : Forfait 45.98 / Remise -5 / Remise -8 = 32.98 (TTC global).
+    // Vision met ces TTC dans `lignes[].montant_ht` (interprétation libre du LLM).
+    // MAIS Vision lit aussi le bandeau TVA explicite : HT 27.48, TVA 20% 5.50, TTC 32.98.
+    //
+    // Avant Phase 4.5 : filter(montant_ht > 0) excluait les remises → 45.98 seul → +22€ delta.
+    // Après Phase 4.5 (filter !== 0) : agrégation 45.98 - 5 - 8 = 32.98 (faux HT) → +6.60€ delta.
+    // Après Phase 4.6 (lignes_tva prime) : base_ht=27.48 utilisé → TVA=5.50 → 32.98 = TTC ✓
     const resultat = construirePayloadV2({
       facture: factureMinimale(),
       extraction: extractionNominale({
         emetteur: { nom: "SFR", pays: "FR", vat: "FR71343059564" },
         numero_piece: "B226-003564061",
-        montant_ht_total: 32.98,
-        montant_ttc_total: 39.58,
-        lignes_tva: [{ taux: 20, base_ht: 32.98, montant_tva: 6.60 }],
+        montant_ht_total: 27.48,
+        montant_ttc_total: 32.98,
+        // Source primaire fiable : bandeau TVA explicite de la facture
+        lignes_tva: [{ taux: 20, base_ht: 27.48, montant_tva: 5.50 }],
+        // Lignes individuelles : Vision a mis les TTC dans montant_ht (bug LLM)
+        // Le builder doit IGNORER ces valeurs et privilégier lignes_tva
         lignes: [
-          { libelle: "Forfait 150 Go 5G", montant_ht: 45.98, taux_tva: 20, montant_ttc: 55.18 },
-          { libelle: "Offre fidélité", montant_ht: -5.00, taux_tva: 20, montant_ttc: -6.00 },
-          { libelle: "Remise Multi", montant_ht: -8.00, taux_tva: 20, montant_ttc: -9.60 },
+          { libelle: "Forfait 150 Go 5G", montant_ht: 45.98, taux_tva: 20, montant_ttc: 45.98 },
+          { libelle: "Offre fidélité", montant_ht: -5.00, taux_tva: 20, montant_ttc: -5.00 },
+          { libelle: "Remise Multi", montant_ht: -8.00, taux_tva: 20, montant_ttc: -8.00 },
         ],
       }),
       decision: decisionNominale({
@@ -216,25 +219,60 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
     });
     expect(resultat.decision).toBe("comptabiliser");
     expect(resultat.payload).toBeDefined();
-    expect(resultat.payload!.header.credit).toBe(39.58);
-    // Ligne charge : HT agrégé = 32.98 (45.98 - 5 - 8)
+    expect(resultat.payload!.header.credit).toBe(32.98);
+    // Ligne charge : HT vrai depuis lignes_tva = 27.48 (pas 32.98 ni 45.98)
     const ligneCharge = resultat.payload!.body.find(
       (l) => l.account === "R_62620000",
     );
     expect(ligneCharge).toBeDefined();
-    expect(ligneCharge!.debit).toBe(32.98);
-    // TVA déductible : 32.98 × 20% = 6.60 €
+    expect(ligneCharge!.debit).toBe(27.48);
+    // TVA déductible : 27.48 × 20% = 5.50 € (pile montant_tva du bandeau)
     const ligneTva = resultat.payload!.body.find(
       (l) => l.account === "R_44566000",
     );
     expect(ligneTva).toBeDefined();
-    expect(ligneTva!.debit).toBe(6.60);
-    // Equilibre : sum(débit) = header.credit
+    expect(ligneTva!.debit).toBe(5.50);
+    // Equilibre : sum(débit) = header.credit = TTC
     const sumDebit = resultat.payload!.body.reduce(
       (s, l) => s + (l.debit ?? 0),
       0,
     );
-    expect(Math.round(sumDebit * 100) / 100).toBe(39.58);
+    expect(Math.round(sumDebit * 100) / 100).toBe(32.98);
+  });
+
+  it("Phase 4.6 recover : sans lignes_tva exploitable, fallback agrégation lignes (avec négatives)", () => {
+    // Cas où Vision n'a pas extrait de bandeau TVA (facture sans récap TVA explicite).
+    // Le builder doit fallback sur l'agrégation des `lignes` individuelles, en
+    // gardant les négatives (Phase 4.5).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Marchand X", pays: "FR" },
+        numero_piece: "F-001",
+        montant_ht_total: 100,
+        montant_ttc_total: 120,
+        lignes_tva: [], // vide, pas exploitable → fallback
+        lignes: [
+          { libelle: "Produit principal", montant_ht: 110, taux_tva: 20, montant_ttc: 132 },
+          { libelle: "Remise -10%", montant_ht: -10, taux_tva: 20, montant_ttc: -12 },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60740000",
+        libelle_ecriture: "Marchand X",
+        fournisseur_fulll: "FDIVERS",
+      }),
+      profil: profilDidierQuentin(),
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.payload).toBeDefined();
+    expect(resultat.payload!.header.credit).toBe(120);
+    // Fallback agrégation : 110 - 10 = 100 (HT vrai cette fois car Vision OK)
+    const ligneCharge = resultat.payload!.body.find(
+      (l) => l.account === "R_60740000",
+    );
+    expect(ligneCharge!.debit).toBe(100);
   });
 
   it("péage VINCI 19 € : payload FR équilibré", () => {

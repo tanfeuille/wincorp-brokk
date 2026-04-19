@@ -149,6 +149,12 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
       relayCharge,
       regime: decision.regime_tva,
       lignesExtraction: lignesEffectives,
+      // Phase 4.6 recover : `lignes_tva` Vision (taux + base_ht + montant_tva
+      // par taux) prime sur agrégation `lignes` individuelles. Vision met
+      // souvent les TTC dans `montant_ht` des lignes (ex SFR détail facture
+      // affiche TTC), causant un faux HT agrégé. `lignes_tva` est pré-calculé
+      // par Vision depuis le bandeau TVA explicite de la facture → fiable.
+      lignesTvaVision: extraction.lignes_tva,
       profil,
       fallbackTtc: ttcEffectif,
       fournisseurNom,
@@ -281,6 +287,16 @@ function calculerLignesTvaAgregees(params: {
   relayCharge: string;
   regime: DecisionDecideur["regime_tva"];
   lignesExtraction: ExtractionVision["lignes"];
+  /**
+   * Bandeau TVA explicite de la facture (Phase 4.6 recover 19/04). Vision
+   * extrait ces tuples `{taux, base_ht, montant_tva}` du bloc "Total HT /
+   * Total TVA / Total TTC" de la facture. Source la plus fiable car
+   * pré-calculée par le fournisseur lui-même. Prime sur l'agrégation des
+   * `lignes` individuelles dont les `montant_ht` peuvent en réalité être
+   * des TTC (ex SFR détail "Forfait 45.98 / Remise -5 / Remise -8" qui
+   * somment au TTC global, pas au HT).
+   */
+  lignesTvaVision?: ExtractionVision["lignes_tva"];
   profil: ProfilDossier;
   fallbackTtc: number;
   fournisseurNom: string;
@@ -294,6 +310,7 @@ function calculerLignesTvaAgregees(params: {
     relayCharge,
     regime,
     lignesExtraction,
+    lignesTvaVision,
     profil,
     fallbackTtc,
     fournisseurNom,
@@ -357,17 +374,47 @@ function calculerLignesTvaAgregees(params: {
   }
 
   // ── Étape 1 — Agrégation HT par taux TVA ──────────────────────────────
+  // Phase 4.6 recover : si `lignesTvaVision` est présent et exploitable,
+  // on l'utilise comme source de vérité (le bandeau TVA d'une facture est
+  // pré-calculé par le fournisseur lui-même). Sinon fallback sur les
+  // lignes individuelles (cas factures sans bandeau TVA explicite).
   const forceAutoliquidation = regime === "intracom" || regime === "extracom";
   const htParTaux = new Map<number, number>();
-  for (const ligne of lignesNonVides) {
-    const tauxVision = typeof ligne.taux_tva === "number" ? ligne.taux_tva : 0;
-    const tauxEffectif =
-      forceAutoliquidation && tauxVision === 0 ? 20 : tauxVision;
-    htParTaux.set(
-      tauxEffectif,
-      (htParTaux.get(tauxEffectif) ?? 0) + (ligne.montant_ht ?? 0),
+
+  const lignesTvaUtilisables =
+    Array.isArray(lignesTvaVision) &&
+    lignesTvaVision.some(
+      (t) =>
+        typeof t.base_ht === "number" &&
+        t.base_ht > 0 &&
+        typeof t.taux === "number",
     );
+
+  if (lignesTvaUtilisables && lignesTvaVision) {
+    // Source primaire : bandeau TVA Vision
+    for (const t of lignesTvaVision) {
+      if (typeof t.base_ht !== "number" || t.base_ht <= 0) continue;
+      const tauxVision = typeof t.taux === "number" ? t.taux : 0;
+      const tauxEffectif =
+        forceAutoliquidation && tauxVision === 0 ? 20 : tauxVision;
+      htParTaux.set(
+        tauxEffectif,
+        (htParTaux.get(tauxEffectif) ?? 0) + t.base_ht,
+      );
+    }
+  } else {
+    // Fallback : agrégation lignes individuelles
+    for (const ligne of lignesNonVides) {
+      const tauxVision = typeof ligne.taux_tva === "number" ? ligne.taux_tva : 0;
+      const tauxEffectif =
+        forceAutoliquidation && tauxVision === 0 ? 20 : tauxVision;
+      htParTaux.set(
+        tauxEffectif,
+        (htParTaux.get(tauxEffectif) ?? 0) + (ligne.montant_ht ?? 0),
+      );
+    }
   }
+
   for (const [taux, ht] of htParTaux) {
     htParTaux.set(taux, Math.round(ht * 100) / 100);
   }
