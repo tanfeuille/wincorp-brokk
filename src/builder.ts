@@ -148,15 +148,9 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
       compteCharge: decision.compte_charge,
       relayCharge,
       regime: decision.regime_tva,
-      lignesExtraction: lignesEffectives,
-      // Phase 4.6 recover : `lignes_tva` Vision (taux + base_ht + montant_tva
-      // par taux) prime sur agrégation `lignes` individuelles. Vision met
-      // souvent les TTC dans `montant_ht` des lignes (ex SFR détail facture
-      // affiche TTC), causant un faux HT agrégé. `lignes_tva` est pré-calculé
-      // par Vision depuis le bandeau TVA explicite de la facture → fiable.
-      lignesTvaVision: extraction.lignes_tva,
+      lignesTva: extraction.lignes_tva,
+      montantTtcTotal: ttcEffectif,
       profil,
-      fallbackTtc: ttcEffectif,
       fournisseurNom,
     });
     lignesCharge = resultatTva.lignesCharge;
@@ -272,33 +266,38 @@ function appliquerForceCentime(extraction: ExtractionVision): {
 }
 
 /**
- * R30 — Calcule les lignes charge + TVA pour l'ensemble des lignes Vision.
+ * R30 — Phase 4.7 (19/04/2026) : approche directe basée sur lignes_tva Vision.
  *
- * Pipeline (refonte 18/04/2026 pour fix ERR-BUILD-03) :
- * 1. Agrégation HT par taux TVA (élimine dérive arrondi ligne-par-ligne).
- * 2. Recalibrage HT sur TTC en régime FR si écart Vision < 10 % du TTC.
- * 3. Calcul TVA une fois par taux sur le HT agrégé (précision maximale).
- * 4. Agrégation TVA par compte (ex: 2 lignes 20 % → 1 seul débit 44566000).
+ * Source unique de vérité : `extraction.lignes_tva` (bandeau TVA pré-calculé
+ * par le fournisseur, lu par Vision depuis "Total HT / Total TVA / Total TTC").
+ * Pas de re-agrégation des lignes individuelles, pas de recalibrage avec
+ * tolérance %. L'équilibre est garanti par construction.
  *
- * Régime franchise : skip génération TVA, charges = HT tel quel (qui vaut TTC).
+ * Stratégie :
+ * - Franchise → 1 ligne charge = `montant_ttc_total` direct (BUG-1 fix : ne
+ *   plus reconstruire depuis lignes individuelles qui peuvent contenir des TTC).
+ * - Autoliquidation intracom/extracom → HT = TTC (le fournisseur étranger ne
+ *   facture pas TVA), TVA artificielle 20% débit + crédit (autoliq équilibrée).
+ * - FR : `lignes_tva` obligatoire, sinon douteux ERR-EXTRACTION-INCOMPLETE.
+ *   Vérif cohérence `sumBaseHt + sumTVA = TTC` :
+ *     • cohérent (delta ≤ 0.01) → htFinal = sumBaseHt direct
+ *     • incohérent < 10% TTC → htFinal = TTC - sumTVA (ajustement par
+ *       soustraction, équilibre exact ; cas écocontribution ALTADIF non lue)
+ *     • incohérent ≥ 10% TTC → douteux ERR-EXTRACTION-INCOHERENTE
+ *   TVA = sum(montant_tva) Vision direct (jamais recalcul × taux).
+ *   Multi-taux : tous les taux mappent au même compte 44566000 (TVA
+ *   déductible unique en FR), donc 1 ligne TVA agrégée.
+ *
+ * Tolerance équilibre payload : 0.01€ (arrondi centime, géré par
+ * equilibrerPayload R33). Plus de tolérance % opaque.
  */
 function calculerLignesTvaAgregees(params: {
   compteCharge: string;
   relayCharge: string;
   regime: DecisionDecideur["regime_tva"];
-  lignesExtraction: ExtractionVision["lignes"];
-  /**
-   * Bandeau TVA explicite de la facture (Phase 4.6 recover 19/04). Vision
-   * extrait ces tuples `{taux, base_ht, montant_tva}` du bloc "Total HT /
-   * Total TVA / Total TTC" de la facture. Source la plus fiable car
-   * pré-calculée par le fournisseur lui-même. Prime sur l'agrégation des
-   * `lignes` individuelles dont les `montant_ht` peuvent en réalité être
-   * des TTC (ex SFR détail "Forfait 45.98 / Remise -5 / Remise -8" qui
-   * somment au TTC global, pas au HT).
-   */
-  lignesTvaVision?: ExtractionVision["lignes_tva"];
+  lignesTva: ExtractionVision["lignes_tva"];
+  montantTtcTotal: number;
   profil: ProfilDossier;
-  fallbackTtc: number;
   fournisseurNom: string;
 }): {
   lignesCharge: PurchaseFormInput["body"];
@@ -306,265 +305,156 @@ function calculerLignesTvaAgregees(params: {
   lignesTvaCredit: PurchaseFormInput["body"];
 } {
   const {
-    compteCharge,
+    compteCharge: _compteCharge,
     relayCharge,
     regime,
-    lignesExtraction,
-    lignesTvaVision,
+    lignesTva,
+    montantTtcTotal,
     profil,
-    fallbackTtc,
     fournisseurNom,
   } = params;
-
-  const lignesCharge: PurchaseFormInput["body"] = [];
-  // Phase 4.5 recover (19/04/2026) : on inclut les lignes négatives (remises
-  // commerciales sur factures positives, ex SFR "Promotion Fibre -4.46€") pour
-  // qu'elles soient soustraites lors de l'agrégation HT par taux. Avant ce
-  // fix : `l.montant_ht > 0` excluait les remises → HT agrégé surévalué →
-  // ERR-BUILD-03 systématique sur factures télécom multi-lignes (delta +22€
-  // observé sur smoke SOAD 19:38).
-  const lignesNonVides = lignesExtraction.filter(
-    (l) => typeof l.montant_ht === "number" && l.montant_ht !== 0,
-  );
-  const libelleCharge = fournisseurNom || "Charge";
+  const labelCharge = fournisseurNom || "Charge";
   const isFranchise =
     regime === "franchise" ||
     profil.comptabilite.regime_tva === "franchise_en_base";
 
-  // ── Fallback : aucune ligne HT exploitable ────────────────────────────
-  if (lignesNonVides.length === 0) {
-    const htEstime = isFranchise
-      ? fallbackTtc
-      : Math.round((fallbackTtc / 1.20) * 100) / 100;
-    lignesCharge.push({
-      account: relayCharge,
-      label: libelleCharge,
-      debit: htEstime,
-      credit: null,
-      vat: null,
-      quantity: null,
-      analytic: null,
-    });
-    if (isFranchise) return { lignesCharge, lignesTvaDebit: [], lignesTvaCredit: [] };
-    const tvaResult = calculerLignesTVA({
-      compteCharge,
-      montantHT: htEstime,
-      tauxTva: 0.20,
-      profil,
-    });
-    return buildLignesTVAResult(tvaResult, lignesCharge, fournisseurNom);
-  }
-
-  // ── Franchise : pas de ligne TVA, HT = TTC ────────────────────────────
+  // ── Franchise : 1 ligne charge = TTC, pas de TVA (fix BUG-1) ─────────
   if (isFranchise) {
-    const totalHT =
-      Math.round(
-        lignesNonVides.reduce((s, l) => s + (l.montant_ht ?? 0), 0) * 100,
-      ) / 100;
-    lignesCharge.push({
-      account: relayCharge,
-      label: libelleCharge,
-      debit: totalHT,
-      credit: null,
-      vat: null,
-      quantity: null,
-      analytic: null,
-    });
-    return { lignesCharge, lignesTvaDebit: [], lignesTvaCredit: [] };
+    return {
+      lignesCharge: [makeLigneDebit(relayCharge, labelCharge, montantTtcTotal)],
+      lignesTvaDebit: [],
+      lignesTvaCredit: [],
+    };
   }
 
-  // ── Étape 1 — Agrégation HT par taux TVA ──────────────────────────────
-  // Phase 4.6 recover : si `lignesTvaVision` est présent et exploitable,
-  // on l'utilise comme source de vérité (le bandeau TVA d'une facture est
-  // pré-calculé par le fournisseur lui-même). Sinon fallback sur les
-  // lignes individuelles (cas factures sans bandeau TVA explicite).
-  const forceAutoliquidation = regime === "intracom" || regime === "extracom";
-  const htParTaux = new Map<number, number>();
+  // ── Cas force centime R29 : facture 0 € tracée à 0,01 € ─────────────
+  // Vision n'a rien à extraire (lignes_tva vide), on génère quand même
+  // 1 ligne charge minimaliste pour la traçabilité comptable SPINEX.
+  if (montantTtcTotal === 0.01 && (!lignesTva || lignesTva.length === 0)) {
+    return {
+      lignesCharge: [makeLigneDebit(relayCharge, labelCharge, 0.01)],
+      lignesTvaDebit: [],
+      lignesTvaCredit: [],
+    };
+  }
 
-  const lignesTvaUtilisables =
-    Array.isArray(lignesTvaVision) &&
-    lignesTvaVision.some(
-      (t) =>
-        typeof t.base_ht === "number" &&
-        t.base_ht > 0 &&
-        typeof t.taux === "number",
+  // ── Autoliquidation intracom/extracom : HT = TTC, TVA artificielle 20% ─
+  // Le fournisseur étranger ne facture pas TVA. On simule TVA déductible
+  // débit + crédit du même montant pour équilibrer (autoliquidation).
+  if (regime === "intracom" || regime === "extracom") {
+    const ht = montantTtcTotal;
+    const tva = round2(ht * 0.20);
+    const compteTvaD = regime === "intracom" ? "44566200" : "44566300";
+    const compteTvaC = regime === "intracom" ? "44520000" : "44571300";
+    return {
+      lignesCharge: [makeLigneDebit(relayCharge, labelCharge, ht)],
+      lignesTvaDebit: [
+        makeLigneDebit(getRelayObligatoire(profil, compteTvaD), fournisseurNom, tva),
+      ],
+      lignesTvaCredit: [
+        makeLigneCredit(getRelayObligatoire(profil, compteTvaC), fournisseurNom, tva),
+      ],
+    };
+  }
+
+  // ── FR : lignes_tva obligatoire ──────────────────────────────────────
+  const lignesUtilisables = (lignesTva ?? []).filter(
+    (t) =>
+      typeof t.base_ht === "number" &&
+      t.base_ht > 0 &&
+      typeof t.taux === "number" &&
+      typeof t.montant_tva === "number",
+  );
+  if (lignesUtilisables.length === 0) {
+    throw new Error(
+      `ERR-EXTRACTION-INCOMPLETE : lignes_tva vide ou non exploitable ` +
+        `(TTC ${montantTtcTotal} €) — Vision n'a pas extrait le bandeau TVA, ` +
+        `impossible de ventiler la TVA déductible`,
     );
+  }
 
-  if (lignesTvaUtilisables && lignesTvaVision) {
-    // Source primaire : bandeau TVA Vision
-    for (const t of lignesTvaVision) {
-      if (typeof t.base_ht !== "number" || t.base_ht <= 0) continue;
-      const tauxVision = typeof t.taux === "number" ? t.taux : 0;
-      const tauxEffectif =
-        forceAutoliquidation && tauxVision === 0 ? 20 : tauxVision;
-      htParTaux.set(
-        tauxEffectif,
-        (htParTaux.get(tauxEffectif) ?? 0) + t.base_ht,
-      );
-    }
+  // ── Vérif cohérence sumBaseHt + sumTVA vs TTC ────────────────────────
+  const sumBaseHt = round2(
+    lignesUtilisables.reduce((s, t) => s + t.base_ht, 0),
+  );
+  const sumTva = round2(
+    lignesUtilisables.reduce((s, t) => s + t.montant_tva, 0),
+  );
+  const ttcReconstruit = round2(sumBaseHt + sumTva);
+  const delta = round2(montantTtcTotal - ttcReconstruit);
+
+  let htFinal: number;
+  if (Math.abs(delta) <= 0.01) {
+    // Cohérent : facture lue parfaitement, on prend le HT Vision direct
+    htFinal = sumBaseHt;
+  } else if (Math.abs(delta) / montantTtcTotal < 0.10) {
+    // Incohérent récupérable (cas écocontribution ALTADIF, ligne non lue) :
+    // HT absorbe l'écart, TVA Vision conservée → équilibre exact garanti.
+    htFinal = round2(montantTtcTotal - sumTva);
   } else {
-    // Fallback : agrégation lignes individuelles
-    for (const ligne of lignesNonVides) {
-      const tauxVision = typeof ligne.taux_tva === "number" ? ligne.taux_tva : 0;
-      const tauxEffectif =
-        forceAutoliquidation && tauxVision === 0 ? 20 : tauxVision;
-      htParTaux.set(
-        tauxEffectif,
-        (htParTaux.get(tauxEffectif) ?? 0) + (ligne.montant_ht ?? 0),
-      );
-    }
+    throw new Error(
+      `ERR-EXTRACTION-INCOHERENTE : delta ${delta} € entre TTC ` +
+        `(${montantTtcTotal} €) et reconstruit (${ttcReconstruit} €) ` +
+        `> 10% du TTC — extraction Vision suspecte, douteux pour vérification`,
+    );
   }
 
-  for (const [taux, ht] of htParTaux) {
-    htParTaux.set(taux, Math.round(ht * 100) / 100);
-  }
+  // ── Lignes payload : 1 charge + 1 TVA déductible 44566000 ────────────
+  // En FR, tous les taux (5.5/10/20) mappent au même compte 44566000
+  // (TVA déductible unique). Pas besoin de déagréger par taux.
+  return {
+    lignesCharge: [makeLigneDebit(relayCharge, labelCharge, htFinal)],
+    lignesTvaDebit: [
+      makeLigneDebit(getRelayObligatoire(profil, "44566000"), fournisseurNom, sumTva),
+    ],
+    lignesTvaCredit: [],
+  };
+}
 
-  // ── Étape 2 — Recalibrage HT sur TTC (FR uniquement) ─────────────────
-  const TOLERANCE_RECALIBRAGE = 0.10;
-  if (regime === "FR" && !forceAutoliquidation) {
-    const tauxNonZero = Array.from(htParTaux.keys()).filter((t) => t > 0);
-    if (tauxNonZero.length > 0) {
-      const totalHTbrut = Array.from(htParTaux.values()).reduce(
-        (s, v) => s + v,
-        0,
-      );
-      let tvaCalcTotal = 0;
-      for (const t of tauxNonZero) {
-        tvaCalcTotal +=
-          Math.round((htParTaux.get(t) ?? 0) * (t / 100) * 100) / 100;
-      }
-      const ttcReconstruit = totalHTbrut + tvaCalcTotal;
-      const ecartTotal =
-        Math.round((fallbackTtc - ttcReconstruit) * 100) / 100;
-      if (
-        Math.abs(ecartTotal) > 0.01 &&
-        Math.abs(ecartTotal) / fallbackTtc < TOLERANCE_RECALIBRAGE
-      ) {
-        const htTauxNonZero = tauxNonZero.reduce(
-          (s, t) => s + (htParTaux.get(t) ?? 0),
-          0,
-        );
-        if (htTauxNonZero > 0) {
-          for (const t of tauxNonZero) {
-            const htActuel = htParTaux.get(t) ?? 0;
-            const partHT = htActuel / htTauxNonZero;
-            const ajustementHT = (ecartTotal * partHT) / (1 + t / 100);
-            htParTaux.set(
-              t,
-              Math.round((htActuel + ajustementHT) * 100) / 100,
-            );
-          }
-        }
-      }
-    }
-  }
+// ── Helpers internes Phase 4.7 ─────────────────────────────────────────
 
-  // ── Étape 3 — Ligne charge agrégée ───────────────────────────────────
-  const totalHtFinal =
-    Math.round(
-      Array.from(htParTaux.values()).reduce((s, v) => s + v, 0) * 100,
-    ) / 100;
-  lignesCharge.push({
-    account: relayCharge,
-    label: libelleCharge,
-    debit: totalHtFinal,
-    credit: null,
-    vat: null,
-    quantity: null,
-    analytic: null,
-  });
-
-  // ── Étape 4 — Calcul TVA par taux + agrégation par compte ─────────────
-  const debitTvaParCompte = new Map<string, { relay: string; montant: number }>();
-  const creditTvaParCompte = new Map<string, { relay: string; montant: number }>();
-
-  for (const [tauxEffectif, totalHTtaux] of htParTaux) {
-    if (tauxEffectif === 0) continue;
-    const tvaResult = calculerLignesTVA({
-      compteCharge,
-      montantHT: totalHTtaux,
-      tauxTva: tauxEffectif / 100,
-      profil,
-    });
-    for (const d of tvaResult.debitsTva) {
-      const agg = debitTvaParCompte.get(d.compte) ?? {
-        relay: d.relay_id,
-        montant: 0,
-      };
-      agg.montant = Math.round((agg.montant + d.montant) * 100) / 100;
-      debitTvaParCompte.set(d.compte, agg);
-    }
-    for (const c of tvaResult.creditsTva) {
-      const agg = creditTvaParCompte.get(c.compte) ?? {
-        relay: c.relay_id,
-        montant: 0,
-      };
-      agg.montant = Math.round((agg.montant + c.montant) * 100) / 100;
-      creditTvaParCompte.set(c.compte, agg);
-    }
-  }
-
-  const lignesTvaDebit: PurchaseFormInput["body"] = Array.from(
-    debitTvaParCompte.entries(),
-  ).map(([, { relay, montant }]) => ({
-    account: relay,
-    label: fournisseurNom,
+function makeLigneDebit(
+  account: string,
+  label: string,
+  montant: number,
+): PurchaseFormInput["body"][number] {
+  return {
+    account,
+    label,
     debit: montant,
     credit: null,
     vat: null,
     quantity: null,
     analytic: null,
-  }));
-  const lignesTvaCredit: PurchaseFormInput["body"] = Array.from(
-    creditTvaParCompte.entries(),
-  ).map(([, { relay, montant }]) => ({
-    account: relay,
-    label: fournisseurNom,
+  };
+}
+
+function makeLigneCredit(
+  account: string,
+  label: string,
+  montant: number,
+): PurchaseFormInput["body"][number] {
+  return {
+    account,
+    label,
     debit: null,
     credit: montant,
     vat: null,
     quantity: null,
     analytic: null,
-  }));
-
-  return { lignesCharge, lignesTvaDebit, lignesTvaCredit };
+  };
 }
 
-/**
- * Helper interne : transforme un `tvaResult` en lignes body débit/crédit.
- */
-function buildLignesTVAResult(
-  tvaResult: ReturnType<typeof calculerLignesTVA>,
-  lignesCharge: PurchaseFormInput["body"],
-  fournisseurNom: string,
-): {
-  lignesCharge: PurchaseFormInput["body"];
-  lignesTvaDebit: PurchaseFormInput["body"];
-  lignesTvaCredit: PurchaseFormInput["body"];
-} {
-  const lignesTvaDebit: PurchaseFormInput["body"] = tvaResult.debitsTva.map(
-    (d) => ({
-      account: d.relay_id,
-      label: fournisseurNom,
-      debit: d.montant,
-      credit: null,
-      vat: null,
-      quantity: null,
-      analytic: null,
-    }),
-  );
-  const lignesTvaCredit: PurchaseFormInput["body"] = tvaResult.creditsTva.map(
-    (c) => ({
-      account: c.relay_id,
-      label: fournisseurNom,
-      debit: null,
-      credit: c.montant,
-      vat: null,
-      quantity: null,
-      analytic: null,
-    }),
-  );
-  return { lignesCharge, lignesTvaDebit, lignesTvaCredit };
+function getRelayObligatoire(profil: ProfilDossier, compte: string): string {
+  const relay = profil.comptes_relay_ids?.[compte];
+  if (!relay) {
+    throw new Error(`Relay ID manquant pour compte TVA ${compte} — ERR-RELAY-TVA`);
+  }
+  return relay;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /**

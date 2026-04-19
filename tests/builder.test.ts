@@ -240,10 +240,10 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
     expect(Math.round(sumDebit * 100) / 100).toBe(32.98);
   });
 
-  it("Phase 4.6 recover : sans lignes_tva exploitable, fallback agrégation lignes (avec négatives)", () => {
-    // Cas où Vision n'a pas extrait de bandeau TVA (facture sans récap TVA explicite).
-    // Le builder doit fallback sur l'agrégation des `lignes` individuelles, en
-    // gardant les négatives (Phase 4.5).
+  it("Phase 4.7 : lignes_tva vide en FR → douteux ERR-EXTRACTION-INCOMPLETE", () => {
+    // Phase 4.7 supprime le fallback fragile sur lignes individuelles. Si
+    // Vision n'a pas extrait le bandeau TVA, on rejette la facture proprement
+    // pour intervention humaine (corrigible dans bifrost session correction).
     const resultat = construirePayloadV2({
       facture: factureMinimale(),
       extraction: extractionNominale({
@@ -251,10 +251,9 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
         numero_piece: "F-001",
         montant_ht_total: 100,
         montant_ttc_total: 120,
-        lignes_tva: [], // vide, pas exploitable → fallback
+        lignes_tva: [], // vide, pas exploitable
         lignes: [
           { libelle: "Produit principal", montant_ht: 110, taux_tva: 20, montant_ttc: 132 },
-          { libelle: "Remise -10%", montant_ht: -10, taux_tva: 20, montant_ttc: -12 },
         ],
       }),
       decision: decisionNominale({
@@ -265,14 +264,8 @@ describe("construirePayloadV2 — cas nominaux FR", () => {
       profil: profilDidierQuentin(),
       bookRelayId: "Qm9vazoyMTcxMDI2",
     });
-    expect(resultat.decision).toBe("comptabiliser");
-    expect(resultat.payload).toBeDefined();
-    expect(resultat.payload!.header.credit).toBe(120);
-    // Fallback agrégation : 110 - 10 = 100 (HT vrai cette fois car Vision OK)
-    const ligneCharge = resultat.payload!.body.find(
-      (l) => l.account === "R_60740000",
-    );
-    expect(ligneCharge!.debit).toBe(100);
+    expect(resultat.decision).toBe("douteux");
+    expect(resultat.raison).toMatch(/ERR-EXTRACTION-INCOMPLETE/);
   });
 
   it("péage VINCI 19 € : payload FR équilibré", () => {
@@ -668,18 +661,25 @@ describe("ERR-BUILD-03 — agrégation TVA + recalibrage HT", () => {
       profil: profilDidierQuentin(),
       bookRelayId: "Qm9vazoyMTcxMDI2",
     });
+    // Phase 4.7 : ALTADIF — delta 4.88€ < 10% TTC → ajustement par soustraction
+    // htFinal = TTC - sumTVAVision = 884.96 - 146.68 = 738.28 (exact, pas approx)
+    // TVA Vision conservée = 146.68. Sum débit = 738.28 + 146.68 = 884.96 = TTC pile.
     expect(resultat.decision).toBe("comptabiliser");
     const ligneCharge = resultat.payload!.body.find(
       (l) => l.account === "R_60740000",
     );
     expect(ligneCharge).toBeDefined();
-    expect(ligneCharge!.debit!).toBeCloseTo(737.47, 1);
+    expect(ligneCharge!.debit).toBe(738.28);
     expect(resultat.payload!.header.credit).toBe(884.96);
+    const ligneTva = resultat.payload!.body.find(
+      (l) => l.account === "R_44566000",
+    );
+    expect(ligneTva!.debit).toBe(146.68);
     const totalDebits = resultat.payload!.body.reduce(
       (s, l) => s + (l.debit ?? 0),
       0,
     );
-    expect(totalDebits).toBeCloseTo(884.96, 2);
+    expect(totalDebits).toBe(884.96);
   });
 
   it("multi-taux ticket caisse (5.5 + 20) : agrégation par taux sans dérive arrondi", () => {
@@ -714,7 +714,9 @@ describe("ERR-BUILD-03 — agrégation TVA + recalibrage HT", () => {
     expect(ligneTva!.debit).toBe(6.66);
   });
 
-  it("mono-taux FR écart > 10% : ne recale PAS (reste douteux via ERR-BUILD-03)", () => {
+  it("mono-taux FR écart > 10% : douteux ERR-EXTRACTION-INCOHERENTE (Vision suspecte)", () => {
+    // Phase 4.7 : delta 140€ entre TTC 200€ et reconstruit 60€ = 70% > 10%
+    // → douteux avec message explicite (avant: ERR-BUILD-03 recalibrage refusé)
     const resultat = construirePayloadV2({
       facture: factureMinimale(),
       extraction: extractionNominale({
@@ -730,7 +732,7 @@ describe("ERR-BUILD-03 — agrégation TVA + recalibrage HT", () => {
       bookRelayId: "Qm9vazoyMTcxMDI2",
     });
     expect(resultat.decision).toBe("douteux");
-    expect(resultat.raison).toMatch(/ERR-BUILD-03/);
+    expect(resultat.raison).toMatch(/ERR-EXTRACTION-INCOHERENTE/);
   });
 
   it("intracom autoliq : pas de recalibrage HT (facture étrangère sans TVA)", () => {
