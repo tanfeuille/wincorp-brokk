@@ -23,6 +23,7 @@ export {
   dateVersISO,
   exerciceDepuisCloture,
   corrigerDateAmbigue,
+  corrigerAnneeOcr,
 } from "./dates.js";
 
 // ── Helpers divers ──────────────────────────────────────────────────

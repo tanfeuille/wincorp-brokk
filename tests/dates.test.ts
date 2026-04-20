@@ -7,6 +7,7 @@ import {
   dateVersISO,
   exerciceDepuisCloture,
   corrigerDateAmbigue,
+  corrigerAnneeOcr,
 } from "../src/index.js";
 
 describe("dateVersISO", () => {
@@ -96,6 +97,115 @@ describe("corrigerDateAmbigue", () => {
     const year = today.getUTCFullYear();
     const dateInExercice = `15/06/${year}`;
     const r = corrigerDateAmbigue(dateInExercice, null, profil);
+    expect(r.inversee).toBe(false);
+  });
+});
+
+// ─── M-1 (ELAG'RIMP 20/04) — correction OCR année ────────────────────
+
+describe("corrigerAnneeOcr — année 2 chiffres tickets caisse", () => {
+  const ref2026 = new Date("2026-06-15T00:00:00Z");
+
+  it("padding siècle courant : 26/04/26 → 26/04/2026", () => {
+    const r = corrigerAnneeOcr("26/04/26", ref2026);
+    expect(r.dateCorrigee).toBe("26/04/2026");
+    expect(r.anneeCorrigee).toBe(true);
+  });
+
+  it("padding même si jour > 12 (JJ=31) : 31/12/26 → 31/12/2026", () => {
+    const r = corrigerAnneeOcr("31/12/26", ref2026);
+    expect(r.dateCorrigee).toBe("31/12/2026");
+    expect(r.anneeCorrigee).toBe(true);
+  });
+
+  it("année déjà à 4 chiffres : pas de correction", () => {
+    const r = corrigerAnneeOcr("26/04/2026", ref2026);
+    expect(r.dateCorrigee).toBe("26/04/2026");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+});
+
+describe("corrigerAnneeOcr — erreur OCR 1926 vs 2026", () => {
+  const ref2026 = new Date("2026-06-15T00:00:00Z");
+
+  it("1926 proche année courante : +100 → 2026", () => {
+    const r = corrigerAnneeOcr("26/04/1926", ref2026);
+    expect(r.dateCorrigee).toBe("26/04/2026");
+    expect(r.anneeCorrigee).toBe(true);
+  });
+
+  it("1925 dans plage glissante [2024..2027] : +100 → 2025", () => {
+    const r = corrigerAnneeOcr("15/06/1925", ref2026);
+    expect(r.dateCorrigee).toBe("15/06/2025");
+    expect(r.anneeCorrigee).toBe(true);
+  });
+
+  it("1999 hors plage glissante : pas de correction (ne devient pas 2099 absurde)", () => {
+    const r = corrigerAnneeOcr("15/06/1999", ref2026);
+    expect(r.dateCorrigee).toBe("15/06/1999");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+
+  it("1900 date système par défaut Fulll : pas de correction", () => {
+    const r = corrigerAnneeOcr("01/01/1900", ref2026);
+    expect(r.dateCorrigee).toBe("01/01/1900");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+
+  it("2000 année valide : pas de correction", () => {
+    const r = corrigerAnneeOcr("26/04/2000", ref2026);
+    expect(r.dateCorrigee).toBe("26/04/2000");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+});
+
+describe("corrigerAnneeOcr — cas limites", () => {
+  it("chaîne vide : pas de correction", () => {
+    const r = corrigerAnneeOcr("");
+    expect(r.dateCorrigee).toBe("");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+
+  it("format non-FR (ISO) : pas de correction", () => {
+    const r = corrigerAnneeOcr("2026-04-26");
+    expect(r.dateCorrigee).toBe("2026-04-26");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+
+  it("composants partiels (JJ/MM seul) : pas de correction", () => {
+    const r = corrigerAnneeOcr("26/04");
+    expect(r.dateCorrigee).toBe("26/04");
+    expect(r.anneeCorrigee).toBe(false);
+  });
+});
+
+describe("corrigerDateAmbigue + corrigerAnneeOcr intégration", () => {
+  const ref2026 = new Date("2026-06-15T00:00:00Z");
+  const period = { start: "2025-04-01", end: "2026-03-31" };
+  const profil: any = {
+    comptabilite: { regime_tva: "reel_normal", cloture: "31/03", logiciel: "Fulll" },
+    identite: { raison_sociale: "", siren: "", forme_juridique: "", dirigeant: "", activite: "", code_ape: "" },
+    comptes_frequents: { charges: [], produits: [] },
+    regles: [],
+  };
+
+  it("cas ELAG'RIMP 1926 : 26/04/1926 → 26/04/2026 (après correction année)", () => {
+    const r = corrigerDateAmbigue("26/04/1926", period, profil);
+    // Correction année AVANT, puis JJ>12 garde en place → pas d'inversion JJ↔MM
+    expect(r.dateCorrigee).toBe("26/04/2026");
+    expect(r.inversee).toBe(false);
+  });
+
+  it("année corrigée tombe dans la période : comptabilisable", () => {
+    // Exercice 2025-04-01 à 2026-03-31, "15/03/1926" → "15/03/2026" (dans exercice)
+    const r = corrigerDateAmbigue("15/03/1926", period, profil);
+    expect(r.dateCorrigee).toBe("15/03/2026");
+  });
+
+  it("garde ji>12 conservée après correction année (reviewer #4)", () => {
+    // "26/04/26" → "26/04/2026", puis ji=26>12 → pas d'inversion JJ↔MM
+    const r = corrigerDateAmbigue("26/04/26", period, profil);
+    expect(r.dateCorrigee).toBe("26/04/2026");
     expect(r.inversee).toBe(false);
   });
 });
