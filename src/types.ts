@@ -238,6 +238,15 @@ export interface DecisionDecideur {
   raisonnement: string;
   confiance: number;
   alertes: string[];
+  /**
+   * Code fournisseur proposé par le décideur LLM AVANT réécriture par le
+   * garde-fou anti-doublon provider (chantier ELAG'RIMP 20/04/2026).
+   * Absent si aucune réécriture — présent quand le garde-fou rewrite
+   * `fournisseur_fulll` vers un canonical (deprecated_codes match ou
+   * Levenshtein match avec labels cohérents). Traçabilité audit DGFIP
+   * (art. L.102 B LPF).
+   */
+  provider_original?: string;
 }
 
 export interface ResultatBuilder {

@@ -24,6 +24,7 @@ export const ALERTES_CODES = [
   "MULTI_LIGNE_VENTILATION",
   "PROVIDER_RESOLU_AUTO",
   "PROVIDER_CREE_AUTO",
+  "PROVIDER_COLLISION_AMBIGUE",
   "RELEVE_BANCAIRE_DETECTE",
   "FACTURE_HORS_EXERCICE",
 ] as const;
@@ -41,6 +42,12 @@ export const DecisionDecideurSchema = z.strictObject({
   raisonnement: z.string(),
   confiance: z.number().min(0).max(100),
   alertes: z.array(z.enum(ALERTES_CODES)),
+  // Chantier garde-fou ELAG'RIMP 20/04 : code proposé par le LLM AVANT
+  // réécriture par le garde-fou post-LLM (fulll-api / run-saisie). Permet la
+  // traçabilité audit DGFIP (art. L.102 B LPF — toute redirection doit être
+  // justifiable) et la cohérence RAG (le RAG indexe le code effectivement
+  // utilisé dans fournisseur_fulll). Absent si aucune réécriture.
+  provider_original: z.string().optional(),
 });
 
 export type DecisionDecideurParsed = z.infer<typeof DecisionDecideurSchema>;
