@@ -72,9 +72,62 @@ describe("Pattern 1 — taux_tva string coerce", () => {
     expect(r.lignes[0]!.taux_tva).toBe(20);
   });
 
-  it("string non numérique : Zod throw proprement", () => {
+  it("string non numérique sur champ optional : passe en undefined (tolérant)", () => {
+    // Fix 20/04 soir : preprocessor renvoie undefined au lieu de string brute
+    // sur parseFloat NaN. Le champ optional accepte donc silencieusement.
+    // Validé sur `lignes.*.taux_tva` (ExtractionLigneSchema, optional).
     const e = extractionMinimale();
-    (e.lignes_tva[0] as any).taux = "abc";
+    e.lignes.push({ libelle: "Produit", taux_tva: "abc" as any } as any);
+    const r = parseExtraction(e);
+    expect(r.lignes[0]!.taux_tva).toBeUndefined();
+  });
+});
+
+describe("Fix 20/04 soir — cas prod ELAG'RIMP smoke", () => {
+  it("lignes.0.montant_ttc = null → undefined (pas d'erreur Zod)", () => {
+    const e = extractionMinimale();
+    e.lignes.push({
+      libelle: "Ligne avec TTC null",
+      montant_ht: 10,
+      taux_tva: 20,
+      montant_ttc: null as any,
+    } as any);
+    const r = parseExtraction(e);
+    expect(r.lignes[0]!.montant_ttc).toBeUndefined();
+  });
+
+  it("lignes.0.taux_tva = '' (string vide) → undefined", () => {
+    const e = extractionMinimale();
+    e.lignes.push({
+      libelle: "Ligne sans TVA",
+      taux_tva: "" as any,
+    } as any);
+    const r = parseExtraction(e);
+    expect(r.lignes[0]!.taux_tva).toBeUndefined();
+  });
+
+  it("lignes_tva.0.base_ht omis → LigneTvaSchema accepte (optional post-fix)", () => {
+    const e = extractionMinimale();
+    // Ligne TVA avec seulement taux + montant_tva, base_ht manquant
+    e.lignes_tva = [
+      { taux: 20, montant_tva: 4.17 } as any,
+    ];
+    const r = parseExtraction(e);
+    expect(r.lignes_tva[0]!.base_ht).toBeUndefined();
+    expect(r.lignes_tva[0]!.taux).toBe(20);
+  });
+
+  it("lignes_tva.0.montant_tva = null → accepté comme undefined", () => {
+    const e = extractionMinimale();
+    e.lignes_tva = [{ taux: 20, base_ht: 83.33, montant_tva: null } as any];
+    const r = parseExtraction(e);
+    expect(r.lignes_tva[0]!.montant_tva).toBeUndefined();
+  });
+
+  it("montant_ttc_total = null sur racine → toujours required → fail", () => {
+    // Garde-fou : le total racine reste obligatoire, null → fail
+    const e = extractionMinimale();
+    (e as any).montant_ttc_total = null;
     expect(() => parseExtraction(e)).toThrow(/ExtractionVision invalide/);
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@tanfeuille/brokk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Brokk — module partagé builder paie/factures Fulll (Yggdrasil). Consommé par wincorp-thor (worker) et wincorp-bifrost (API session correction).",
   "type": "module",
   "main": "dist/index.js",
