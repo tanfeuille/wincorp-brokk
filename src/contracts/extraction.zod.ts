@@ -113,7 +113,24 @@ export const ExtractionLigneSchema = z.strictObject({
   montant_ttc: nombreOptionnelTolerant,
 });
 
-export const IndicesContextSchema = z.strictObject({
+/**
+ * `indices_context` est un bag de signaux contextuels que Vision enrichit
+ * librement. Smoke TOMETY 21/04 après-midi (session 4) a révélé une nouvelle
+ * variante `est_facture_telecom` — différente de `est_facture_abonnement`
+ * qui venait d'être fixée le même jour. Pattern whack-a-mole confirmé.
+ *
+ * Décision 21/04 : passer de `z.strictObject` à `z.looseObject` sur cette
+ * clé spécifiquement — accepte toute clé `est_*` ou autre flag contextuel
+ * inventé par le LLM sans rejet. Les clés explicitement listées ci-dessous
+ * restent typées (le décideur peut lire `est_avoir`, `mention_acompte`,
+ * etc. en type-safe). Les clés non listées sont préservées en passthrough
+ * sans validation.
+ *
+ * Les autres schémas du contrat (EmetteurSchema, LigneTvaSchema,
+ * ExtractionLigneSchema, ExtractionVisionSchema) RESTENT strict — seul
+ * `indices_context` est un bag permissif car c'est sa nature.
+ */
+export const IndicesContextSchema = z.looseObject({
   nb_couverts: nombreOptionnelTolerant,
   mention_invites: z.boolean().optional(),
   type_transaction: z.enum(["b2b", "b2c", "inconnu"]).optional(),

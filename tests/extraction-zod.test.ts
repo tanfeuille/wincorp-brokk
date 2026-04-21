@@ -261,10 +261,16 @@ describe("Pattern 5 — indices_context.client (objet B2B)", () => {
     expect((r.indices_context as any).client).toBeUndefined();
   });
 
-  it("clé parent inconnue : toujours rejetée (strictObject conservé)", () => {
+  it("clé inconnue dans indices_context : ACCEPTÉE et préservée (looseObject — fix 21/04 post-smoke TOMETY)", () => {
+    // Vision invente régulièrement des flags `est_*` (est_facture_telecom,
+    // est_facture_abonnement, est_appel_de_fonds_copropriete, …). Plutôt que
+    // jouer au whack-a-mole, IndicesContextSchema est passé en looseObject.
     const e = extractionMinimale();
+    (e.indices_context as any).est_facture_telecom = true;
     (e.indices_context as any).autreCleInconnue = "test";
-    expect(() => parseExtraction(e)).toThrow(/ExtractionVision invalide/);
+    const r = parseExtraction(e);
+    expect((r.indices_context as any).est_facture_telecom).toBe(true);
+    expect((r.indices_context as any).autreCleInconnue).toBe("test");
   });
 });
 
