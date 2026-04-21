@@ -132,6 +132,13 @@ export const IndicesContextSchema = z.strictObject({
   est_ticket_caisse: z.boolean().optional(),
   est_avoir: z.boolean().optional(),
   mention_acompte: z.boolean().optional(),
+  // Clé observée en prod TOMETY 21/04 (Vision ajoute ce flag sur factures
+  // de syndic / copropriété — MA RESIDENCE, OPAC, Loiselet & Daigremont).
+  // Signal utile pour le décideur : un appel de fonds n'est pas une facture
+  // classique d'achat (routing possible vers compte 614 charges locatives
+  // ou 615 entretien selon nature). Schéma strict → ajout explicite sinon
+  // rejet (2 erreurs ERR-EXTRACTION session 33+35 smoke TOMETY).
+  est_appel_de_fonds_copropriete: z.boolean().optional(),
   // Clé observée en prod ELAG'RIMP 20/04 (Vision ajoute un objet `client`
   // sur factures B2B professionnelles — nom, adresse, SIREN du destinataire).
   // Ajouté en passthrough (`z.unknown()`) pour ne pas casser sur les
