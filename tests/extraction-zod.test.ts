@@ -268,6 +268,29 @@ describe("Pattern 5 — indices_context.client (objet B2B)", () => {
   });
 });
 
+describe("Flags contextuels Vision (TOMETY 21/04)", () => {
+  it("est_appel_de_fonds_copropriete = true : accepté", () => {
+    const e = extractionMinimale();
+    (e.indices_context as any).est_appel_de_fonds_copropriete = true;
+    const r = parseExtraction(e);
+    expect(r.indices_context.est_appel_de_fonds_copropriete).toBe(true);
+  });
+
+  it("est_facture_abonnement = true : accepté (télécom récurrent Orange/SFR/Bouygues/Free)", () => {
+    const e = extractionMinimale();
+    (e.indices_context as any).est_facture_abonnement = true;
+    const r = parseExtraction(e);
+    expect(r.indices_context.est_facture_abonnement).toBe(true);
+  });
+
+  it("flags contextuels absents : accepté (optional)", () => {
+    const e = extractionMinimale();
+    const r = parseExtraction(e);
+    expect(r.indices_context.est_appel_de_fonds_copropriete).toBeUndefined();
+    expect(r.indices_context.est_facture_abonnement).toBeUndefined();
+  });
+});
+
 describe("ExtractionVision global — borne confiance", () => {
   it("confiance 101 : rejetée (max 100)", () => {
     const e = extractionMinimale();

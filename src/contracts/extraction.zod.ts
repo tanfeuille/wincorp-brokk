@@ -139,6 +139,13 @@ export const IndicesContextSchema = z.strictObject({
   // ou 615 entretien selon nature). Schéma strict → ajout explicite sinon
   // rejet (2 erreurs ERR-EXTRACTION session 33+35 smoke TOMETY).
   est_appel_de_fonds_copropriete: z.boolean().optional(),
+  // Clé observée en prod TOMETY 21/04 matin (Vision ajoute ce flag sur
+  // factures d'abonnement télécom récurrent — Orange, SFR, Bouygues, Free).
+  // Signal métier : facture d'abonnement récurrent → préférer un F-code dédié
+  // plutôt que FDIVERS (complémentaire aux ancrages canoniques 21/04).
+  // Schéma strict → ajout explicite sinon rejet (1 erreur ERR-EXTRACTION
+  // session 12 smoke TOMETY 21/04).
+  est_facture_abonnement: z.boolean().optional(),
   // Clé observée en prod ELAG'RIMP 20/04 (Vision ajoute un objet `client`
   // sur factures B2B professionnelles — nom, adresse, SIREN du destinataire).
   // Ajouté en passthrough (`z.unknown()`) pour ne pas casser sur les
