@@ -40,6 +40,14 @@ export const ALERTES_CODES = [
   "PROVIDER_COLLISION_AMBIGUE",
   "RELEVE_BANCAIRE_DETECTE",
   "FACTURE_HORS_EXERCICE",
+  // TVA estimée à 20% par le builder (fallback déterministe) quand Vision a
+  // raté le bandeau TVA sur un ticket carburant FR régime normal (compte
+  // 60617000). Émise UNIQUEMENT par le builder via le canal `alertes_builder`
+  // de ResultatBuilder — le décideur LLM ne l'émet jamais. Niveau info
+  // (non bloquant). Fix ERR-BUILD-02 fallback carburant (21/04/2026).
+  // Préfixe `_CARBURANT` en prévision d'extensions futures (_FOURNITURES,
+  // _TRANSPORT) vers d'autres comptes où TVA 20% est quasi-certain.
+  "TVA_ESTIMEE_FALLBACK_CARBURANT",
 ] as const;
 
 export const RegimeTvaSchema = z.enum(["FR", "intracom", "extracom", "franchise"]);

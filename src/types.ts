@@ -83,6 +83,14 @@ export interface ProfilDossier {
     telecharger_pdf?: boolean;
     mode_agent?: string;
     comptes_digits?: 6 | 8;
+    /**
+     * Active le fallback TVA déterministe carburant (compte 60617000 FR)
+     * quand Vision rate le bandeau TVA. Défaut `true` (undefined = active).
+     * Passer `false` pour désactiver au niveau du dossier (cas restaurateurs
+     * / gros volumes de tickets photographiés pas propres où l'utilisateur
+     * préfère une revue manuelle systématique).
+     */
+    tva_fallback_carburant?: boolean;
   };
   /** IDs Relay des fournisseurs — fallback quand bookQuery provider.id est vide. */
   fournisseurs_relay_ids?: Record<string, string>;
@@ -255,6 +263,14 @@ export interface ResultatBuilder {
   raison?: string;
   confiance: number;
   comptesFinaux: string[];
+  /**
+   * Alertes émises par le builder (distinctes de `decision.alertes` qui
+   * viennent du décideur LLM). Le builder ne mute pas la décision : ses
+   * signaux propres remontent par ce canal dédié. Le caller (thor) concat
+   * `decision.alertes` + `resultat.alertes_builder` pour le persist/commit.
+   * Ex. `TVA_ESTIMEE_FALLBACK_CARBURANT` pour fallback TVA 20% carburant.
+   */
+  alertes_builder?: string[];
 }
 
 export interface ContextDecideur {

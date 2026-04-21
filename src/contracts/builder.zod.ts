@@ -12,6 +12,14 @@ export const ResultatBuilderSchema = z.strictObject({
   raison: z.string().optional(),
   confiance: z.number().min(0).max(100),
   comptesFinaux: z.array(z.string()),
+  /**
+   * Alertes émises par le builder (distinctes de `decision.alertes` qui
+   * viennent du décideur LLM). Permet au builder de remonter des signaux
+   * propres (ex. `TVA_ESTIMEE_FALLBACK_CARBURANT`) sans muter la décision.
+   * Le caller (thor) concatène `decision.alertes` + `resultat.alertes_builder`
+   * lors du persist ou du commit Fulll. Absent ou vide = aucune alerte builder.
+   */
+  alertes_builder: z.array(z.string()).optional(),
 });
 
 export type ResultatBuilderParsed = z.infer<typeof ResultatBuilderSchema>;

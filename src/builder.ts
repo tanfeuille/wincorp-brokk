@@ -32,6 +32,7 @@ import type {
 import { calculerLignesTVA } from "./tva.js";
 import { dateVersISO as dateVersISOLib } from "./dates.js";
 import { parseExtraction, parseDecision } from "./contracts/index.js";
+import { appliquerFallbackTvaCarburant } from "./fallback-tva.js";
 
 /**
  * Wrapper local : si l'entrée n'est pas convertible (vide ou pas de "/"),
@@ -126,6 +127,22 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   // ── R29 : force 0 € → 0,01 € ───────────────────────────────────────
   const { ttcEffectif, lignesEffectives } = appliquerForceCentime(extraction);
 
+  // ── R36 : fallback TVA carburant (ERR-BUILD-02 recovery) ───────────
+  // Si Vision a raté le bandeau TVA sur un ticket carburant FR régime normal
+  // (compte 60617000), on synthétise une ligne TVA 20% déterministe. Toggle
+  // par dossier via `profil.parametres.tva_fallback_carburant` (défaut true).
+  const fallbackActive = profil.parametres?.tva_fallback_carburant !== false;
+  const fallbackResult = appliquerFallbackTvaCarburant(
+    extraction,
+    decision,
+    fallbackActive,
+  );
+  const extractionFinale = fallbackResult.extraction;
+  const alertesBuilder: string[] = [];
+  if (fallbackResult.applique) {
+    alertesBuilder.push("TVA_ESTIMEE_FALLBACK_CARBURANT");
+  }
+
   // ── Validation relay_id compte charge ──────────────────────────────
   const relayCharge = profil.comptes_relay_ids?.[decision.compte_charge];
   if (!relayCharge) {
@@ -148,7 +165,7 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
       compteCharge: decision.compte_charge,
       relayCharge,
       regime: decision.regime_tva,
-      lignesTva: extraction.lignes_tva,
+      lignesTva: extractionFinale.lignes_tva,
       montantTtcTotal: ttcEffectif,
       profil,
       fournisseurNom,
@@ -227,6 +244,7 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
     payload,
     confiance: decision.confiance,
     comptesFinaux,
+    ...(alertesBuilder.length > 0 ? { alertes_builder: alertesBuilder } : {}),
   };
 }
 

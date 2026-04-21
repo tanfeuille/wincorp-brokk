@@ -17,6 +17,11 @@ export {
 // ── Helpers TVA ──────────────────────────────────────────────────────
 export { calculerLignesTVA } from "./tva.js";
 export { determinerRegimeTvaDepuisCompte } from "./regimes.js";
+export {
+  appliquerFallbackTvaCarburant,
+  COMPTES_FALLBACK_TVA_20,
+  type FallbackTvaResult,
+} from "./fallback-tva.js";
 
 // ── Helpers dates ────────────────────────────────────────────────────
 export {
