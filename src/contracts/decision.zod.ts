@@ -15,6 +15,19 @@ export const ALERTES_CODES = [
   "COMPTE_HORS_PROFIL",
   "FOURNISSEUR_HALLUCINATION",
   "FOURNISSEUR_DIVERS",
+  // Code fournisseur F-alphanum bien formé proposé par le décideur mais absent
+  // de la config `agent_fournisseurs` du dossier. Signal informatif (non bloquant) :
+  // le pipeline aval (resoudreOuCreerProviderImage) cherche le code dans Fulll
+  // et le crée si absent. Permet au décideur de réutiliser les providers Fulll
+  // préexistants du dossier sans pollution FDIVERS (fix Session 1 21/04 — bug
+  // TOMETY où IKEA/Orange/Amazon étaient écrasés en FDIVERS).
+  "FOURNISSEUR_EXTERNE",
+  // Sous-alerte trace : FOURNISSEUR_EXTERNE émis alors que le cache garde-fou
+  // canonical est vide ou quasi-vide (<3 entries). Signale un dossier fraîchement
+  // onboardé où le risque de pollution par création de providers hallucinés est
+  // plus élevé. Non bloquant, sert à l'audit post-run et à la priorisation
+  // d'une revue humaine du rapport.
+  "FOURNISSEUR_EXTERNE_COLD_START",
   "INCOHERENCE_REGIME_COMPTE_INTRACOM",
   "INCOHERENCE_REGIME_COMPTE_EXTRACOM",
   "FRANCHISE_HORS_PROFIL",
