@@ -22,6 +22,12 @@ export {
   COMPTES_FALLBACK_TVA_20,
   type FallbackTvaResult,
 } from "./fallback-tva.js";
+export {
+  verifierGardeFousPreMutation,
+  synthetiserReference,
+  resoudreReference,
+  type GardeFousResult,
+} from "./pre-mutation-guards.js";
 
 // ── Helpers dates ────────────────────────────────────────────────────
 export {

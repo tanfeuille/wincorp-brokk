@@ -48,6 +48,24 @@ export const ALERTES_CODES = [
   // Préfixe `_CARBURANT` en prévision d'extensions futures (_FOURNITURES,
   // _TRANSPORT) vers d'autres comptes où TVA 20% est quasi-certain.
   "TVA_ESTIMEE_FALLBACK_CARBURANT",
+  // Numéro de pièce synthétique généré par le builder quand Vision n'a pas
+  // lu de `numero_piece` (cas typique : tickets carburant Leclerc / Intermarché
+  // sans numéro imprimé). Format `AUTO-YYMMDD-TTC-hash4` (~20 chars). Émise
+  // via `alertes_builder`. Niveau info — permet traçabilité révision.
+  // Session 3 ERR-BUILD-02 (21/04/2026).
+  "REFERENCE_AUTO_SYNTHESE",
+  // Rejet Fulll `recordPurchaseFormMutation: Aucune période` — la facture
+  // est datée d'un exercice fiscal non ouvert côté Fulll (paramétrage dossier).
+  // Émise par thor (caller run-saisie) après échec mutation, reconnue via
+  // regex dans classifierMessageRejet. Action user : ouvrir l'exercice côté
+  // Fulll OU traiter manuellement (cas TOMETY 21/04 factures 2024 en 2025).
+  "FACTURE_PERIODE_FULLL_FERMEE",
+  // Rejet Fulll opaque `Internal Server Error` / `Une erreur est survenue`
+  // sans détail actionnable. Tag de suivi pour investigation future (distinct
+  // du bucket générique `autre`). Observé sur ELAG'RIMP 20/04 carburant
+  // Leclerc. Ne flip jamais `applique=true` auto (erreur transitoire,
+  // pas un pattern apprenable). Session 3 (21/04/2026).
+  "ISE_FULLL_OPAQUE",
 ] as const;
 
 export const RegimeTvaSchema = z.enum(["FR", "intracom", "extracom", "franchise"]);

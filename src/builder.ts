@@ -33,6 +33,10 @@ import { calculerLignesTVA } from "./tva.js";
 import { dateVersISO as dateVersISOLib } from "./dates.js";
 import { parseExtraction, parseDecision } from "./contracts/index.js";
 import { appliquerFallbackTvaCarburant } from "./fallback-tva.js";
+import {
+  verifierGardeFousPreMutation,
+  resoudreReference,
+} from "./pre-mutation-guards.js";
 
 /**
  * Wrapper local : si l'entrée n'est pas convertible (vide ou pas de "/"),
@@ -154,9 +158,28 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
     };
   }
 
+  // ── Garde-fous pré-mutation (Session 3 ERR-BUILD-05) ───────────────
+  // Empêche l'envoi d'un payload avec champ critique vide qui ferait
+  // rejeter Fulll silencieusement (ISE opaque). Vérifie provider + label.
+  const gardes = verifierGardeFousPreMutation(facture, decision);
+  if (!gardes.ok) {
+    return {
+      decision: "douteux",
+      raison: gardes.raison,
+      confiance: decision.confiance,
+      comptesFinaux: [],
+    };
+  }
+  const fournisseurNom = gardes.data.fournisseurNom;
+  const providerRelay = gardes.data.providerRelay;
+
+  // Référence synthétique si numero_piece vide (tickets carburant sans n°)
+  const refInfo = resoudreReference(extractionFinale, facture, ttcEffectif);
+  if (refInfo.synthetisee) {
+    alertesBuilder.push("REFERENCE_AUTO_SYNTHESE");
+  }
+
   // ── R30 : calcul lignes TVA mécanique ─────────────────────────────
-  const fournisseurNom =
-    facture.provider?.name ?? decision.fournisseur_fulll ?? "";
   let lignesCharge: PurchaseFormInput["body"];
   let lignesTvaDebit: PurchaseFormInput["body"];
   let lignesTvaCredit: PurchaseFormInput["body"];
@@ -184,7 +207,6 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   }
 
   // ── R32 : assemblage PurchaseFormInput ────────────────────────────
-  const providerRelay = facture.provider?.id ?? "";
   const formAccountDetails = facture.form?.accountDetails ?? {
     companyRegistration: null,
     intraVAT: null,
@@ -209,7 +231,7 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
       fax: formAccountDetails.fax ?? null,
     },
     header: {
-      reference: extraction.numero_piece || "",
+      reference: refInfo.reference,
       label: fournisseurNom,
       debit: null,
       credit: ttcEffectif,
@@ -597,8 +619,25 @@ function construirePayloadAcompteV2(params: {
     };
   }
 
-  const fournisseurNom =
-    facture.provider?.name ?? decision.fournisseur_fulll ?? "";
+  // ── Garde-fous pré-mutation (Session 3 ERR-BUILD-05) — branche acompte
+  const gardes = verifierGardeFousPreMutation(facture, decision);
+  if (!gardes.ok) {
+    return {
+      decision: "douteux",
+      raison: gardes.raison,
+      confiance: decision.confiance,
+      comptesFinaux: [],
+    };
+  }
+  const fournisseurNom = gardes.data.fournisseurNom;
+  const providerRelay = gardes.data.providerRelay;
+  const alertesBuilder: string[] = [];
+
+  // Référence synthétique si numero_piece vide (tickets acompte sans n°)
+  const refInfo = resoudreReference(extraction, facture, ttcEffectif);
+  if (refInfo.synthetisee) {
+    alertesBuilder.push("REFERENCE_AUTO_SYNTHESE");
+  }
   const chargesFulll = bodyFulll.filter(
     (l) => l.accountNumber !== "40910000",
   );
@@ -687,7 +726,6 @@ function construirePayloadAcompteV2(params: {
     analytic: null,
   };
 
-  const providerRelay = facture.provider?.id ?? "";
   const formAccountDetails = facture.form?.accountDetails ?? {
     companyRegistration: null,
     intraVAT: null,
@@ -712,7 +750,7 @@ function construirePayloadAcompteV2(params: {
       fax: formAccountDetails.fax ?? null,
     },
     header: {
-      reference: extraction.numero_piece || "",
+      reference: refInfo.reference,
       label: fournisseurNom,
       debit: null,
       credit: resteDu > 0 ? resteDu : ttcEffectif,
@@ -743,6 +781,7 @@ function construirePayloadAcompteV2(params: {
     payload,
     confiance: decision.confiance,
     comptesFinaux: remonterComptesPCG(payload, facture, profil),
+    ...(alertesBuilder.length > 0 ? { alertes_builder: alertesBuilder } : {}),
   };
 }
 
