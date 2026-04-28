@@ -131,10 +131,13 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   // ── R29 : force 0 € → 0,01 € ───────────────────────────────────────
   const { ttcEffectif, lignesEffectives } = appliquerForceCentime(extraction);
 
-  // ── R36 : fallback TVA carburant (ERR-BUILD-02 recovery) ───────────
-  // Si Vision a raté le bandeau TVA sur un ticket carburant FR régime normal
-  // (compte 60617000), on synthétise une ligne TVA 20% déterministe. Toggle
-  // par dossier via `profil.parametres.tva_fallback_carburant` (défaut true).
+  // ── R36 : fallback TVA déterministe (ERR-BUILD-02 recovery) ─────────
+  // Si Vision a raté le bandeau TVA sur une facture FR régime normal sur
+  // l'un des comptes éligibles (carburant 60617000, marchandises 60630000,
+  // voyages 62560000, divers 62800000, fournitures 60631000), on synthétise
+  // une ligne TVA 20% déterministe. Toggle par dossier via
+  // `profil.parametres.tva_fallback_carburant` (défaut true). V2 Sprint A
+  // 28/04/2026 — généralisation depuis V1 carburant uniquement.
   const fallbackActive = profil.parametres?.tva_fallback_carburant !== false;
   const fallbackResult = appliquerFallbackTvaCarburant(
     extraction,
@@ -144,7 +147,14 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   const extractionFinale = fallbackResult.extraction;
   const alertesBuilder: string[] = [];
   if (fallbackResult.applique) {
-    alertesBuilder.push("TVA_ESTIMEE_FALLBACK_CARBURANT");
+    // Alerte générique principale (Sprint A 28/04/2026 — V2 multi-comptes).
+    alertesBuilder.push("TVA_ESTIMEE_FALLBACK");
+    // Alias rétro-compat émis UNIQUEMENT pour le compte historique 60617000
+    // (carburant). Permet aux dashboards / scripts qui filtraient sur ce code
+    // (Session 2b 21/04/2026) de continuer à fonctionner sans modif.
+    if (fallbackResult.compteApplique === "60617000") {
+      alertesBuilder.push("TVA_ESTIMEE_FALLBACK_CARBURANT");
+    }
   }
 
   // ── Validation relay_id compte charge ──────────────────────────────

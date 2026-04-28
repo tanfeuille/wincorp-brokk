@@ -19,7 +19,12 @@ export { calculerLignesTVA } from "./tva.js";
 export { determinerRegimeTvaDepuisCompte } from "./regimes.js";
 export {
   appliquerFallbackTvaCarburant,
+  // Alias V2 (Sprint A 28/04/2026) — la fonction couvre 5 comptes désormais
+  // (carburant + marchandises + voyages + divers + fournitures), le nom
+  // historique reste exporté pour rétro-compat des callers existants.
+  appliquerFallbackTvaCarburant as appliquerFallbackTva,
   COMPTES_FALLBACK_TVA_20,
+  COMPTES_RISQUE_MIX_TAUX,
   type FallbackTvaResult,
 } from "./fallback-tva.js";
 export {

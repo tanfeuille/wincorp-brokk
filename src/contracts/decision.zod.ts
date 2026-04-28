@@ -40,13 +40,19 @@ export const ALERTES_CODES = [
   "PROVIDER_COLLISION_AMBIGUE",
   "RELEVE_BANCAIRE_DETECTE",
   "FACTURE_HORS_EXERCICE",
-  // TVA estimée à 20% par le builder (fallback déterministe) quand Vision a
-  // raté le bandeau TVA sur un ticket carburant FR régime normal (compte
-  // 60617000). Émise UNIQUEMENT par le builder via le canal `alertes_builder`
-  // de ResultatBuilder — le décideur LLM ne l'émet jamais. Niveau info
-  // (non bloquant). Fix ERR-BUILD-02 fallback carburant (21/04/2026).
-  // Préfixe `_CARBURANT` en prévision d'extensions futures (_FOURNITURES,
-  // _TRANSPORT) vers d'autres comptes où TVA 20% est quasi-certain.
+  // TVA estimée à 20% par le builder (fallback déterministe) — alerte
+  // générique émise sur tous les comptes éligibles (cf. COMPTES_FALLBACK_TVA_20
+  // dans fallback-tva.ts : carburant 60617000, marchandises 60630000, voyages
+  // 62560000, divers 62800000, fournitures 60631000). Émise UNIQUEMENT par le
+  // builder via le canal `alertes_builder` de ResultatBuilder — le décideur
+  // LLM ne l'émet jamais. Niveau info (non bloquant). Sprint A 28/04/2026 —
+  // élargissement V1 (carburant uniquement) → V2 (5 comptes courants TVA 20%).
+  "TVA_ESTIMEE_FALLBACK",
+  // Alias rétro-compat de `TVA_ESTIMEE_FALLBACK` émis UNIQUEMENT lorsque le
+  // compte appliqué est `60617000` (carburant). Permet aux dashboards et
+  // scripts qui filtraient sur ce code historique (Session 2b 21/04/2026)
+  // de continuer à fonctionner sans modif. Nouveaux callers : préférer
+  // `TVA_ESTIMEE_FALLBACK` générique.
   "TVA_ESTIMEE_FALLBACK_CARBURANT",
   // Numéro de pièce synthétique généré par le builder quand Vision n'a pas
   // lu de `numero_piece` (cas typique : tickets carburant Leclerc / Intermarché
