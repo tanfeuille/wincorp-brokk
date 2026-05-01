@@ -14,12 +14,19 @@ export const ALERTES_CODES = [
   "COMPTE_INVALIDE_FORMAT",
   "COMPTE_HORS_PROFIL",
   "FOURNISSEUR_HALLUCINATION",
-  // Décideur strict (chantier 01/05/2026) : le décideur n'a pas trouvé de
-  // match dans `agent_fournisseurs` du dossier → fallback `defaut`. Émise
-  // par validerFournisseur quand le code proposé par le LLM est hors liste.
-  // Bloc Guard 3 FOURNISSEUR_EXTERNE supprimé (ne plus accepter F-alphanum
-  // bien formé hors config — créerait pollution).
+  // Le code proposé par le LLM (ou choisi par le caller) n'est pas dans
+  // agent_fournisseurs du dossier — ni dans Fulll comme provider_account
+  // initial. Émise par validerFournisseur en fallback `defaut`.
   "FOURNISSEUR_DIVERS",
+  // Code F-alphanum bien formé proposé par le décideur mais absent de
+  // agent_fournisseurs du dossier. Signal informatif (non bloquant) : le
+  // décideur peut légitimement proposer un code Fulll préexistant hors
+  // liste curée (cas FCARBU, FRESTAURANT, etc. créés à d'anciens runs).
+  // Le pipeline aval `resoudreOuCreerProviderImage(lookupOnly=true)` cherche
+  // le code dans Fulll → use si trouvé / bascule douteuse PROVIDER_NON_TROUVE
+  // si null. Réintroduit chantier B3 (01/05/2026 PM) après que le strict v1
+  // a cassé le respect des codes Fulll préexistants.
+  "FOURNISSEUR_EXTERNE",
   // Provider Fulll introuvable côté Fulll Image (lookupOnly post chantier
   // 01/05/2026) — le worker thor ne crée plus de provider runtime.
   // Émise par run-saisie après resoudreOuCreerProviderImage(..., {lookupOnly:true})
