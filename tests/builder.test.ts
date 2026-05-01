@@ -589,23 +589,14 @@ describe("construirePayloadV2 — routing acompte (R28)", () => {
       profil: profilDidierQuentin(),
       bookRelayId: "Qm9vazoyMTcxMDI2",
     });
-    expect(resultat.decision).toBe("comptabiliser");
-    expect(resultat.payload!.header.credit).toBe(492);
-    expect(
-      resultat.payload!.body.some(
-        (l) => l.account === "R_40910000" && l.credit === 492,
-      ),
-    ).toBe(true);
-    expect(
-      resultat.payload!.body.some(
-        (l) => l.account === "R_60740000" && l.debit === 820,
-      ),
-    ).toBe(true);
-    expect(
-      resultat.payload!.body.some(
-        (l) => l.account === "R_44566000" && l.debit === 164,
-      ),
-    ).toBe(true);
+    // Chantier 01/05/2026 — acomptes en stand-by (gestion mal gérée pré-cleanup).
+    // La détection de ligne 40910000 dans facture.form.body bascule la facture
+    // en douteuse pour traitement manuel Fulll. construirePayloadAcompteV2
+    // n'est plus appelé tant que le sprint dédié acomptes n'a pas été fait.
+    expect(resultat.decision).toBe("douteux");
+    expect(resultat.raison).toMatch(/ACOMPTE_NON_GERE_V1/);
+    expect(resultat.alertes_builder).toContain("ACOMPTE_NON_GERE_V1");
+    expect(resultat.payload).toBeUndefined();
   });
 });
 

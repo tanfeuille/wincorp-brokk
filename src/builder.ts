@@ -108,7 +108,11 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
     };
   }
 
-  // ── R28 : routing acompte ──────────────────────────────────────────
+  // ── R28 (chantier 01/05/2026) : routing acompte mis en stand-by ────
+  // User a explicitement reporté la gestion des acomptes : "déjà que la
+  // simple comptabilisation est mal gérée, on va mettre en stand-by ce
+  // point pour le moment". Toute facture acompte → bascule douteuse pour
+  // traitement manuel Fulll en attendant un sprint dédié post base saine.
   const ligneAcompteFulll = facture.form?.body?.find(
     (l) => l.accountNumber === "40910000",
   );
@@ -118,14 +122,13 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
     ligneAcompteFulll !== undefined;
 
   if (declencheurAcompte) {
-    return construirePayloadAcompteV2({
-      facture,
-      extraction,
-      decision,
-      profil,
-      bookRelayId,
-      ligneAcompteFulll,
-    });
+    return {
+      decision: "douteux",
+      raison: "ACOMPTE_NON_GERE_V1 : routing acompte stand-by, traitement manuel Fulll requis",
+      confiance: decision.confiance,
+      comptesFinaux: [],
+      alertes_builder: ["ACOMPTE_NON_GERE_V1"],
+    };
   }
 
   // ── R29 : force 0 € → 0,01 € ───────────────────────────────────────

@@ -14,20 +14,25 @@ export const ALERTES_CODES = [
   "COMPTE_INVALIDE_FORMAT",
   "COMPTE_HORS_PROFIL",
   "FOURNISSEUR_HALLUCINATION",
+  // Décideur strict (chantier 01/05/2026) : le décideur n'a pas trouvé de
+  // match dans `agent_fournisseurs` du dossier → fallback `defaut`. Émise
+  // par validerFournisseur quand le code proposé par le LLM est hors liste.
+  // Bloc Guard 3 FOURNISSEUR_EXTERNE supprimé (ne plus accepter F-alphanum
+  // bien formé hors config — créerait pollution).
   "FOURNISSEUR_DIVERS",
-  // Code fournisseur F-alphanum bien formé proposé par le décideur mais absent
-  // de la config `agent_fournisseurs` du dossier. Signal informatif (non bloquant) :
-  // le pipeline aval (resoudreOuCreerProviderImage) cherche le code dans Fulll
-  // et le crée si absent. Permet au décideur de réutiliser les providers Fulll
-  // préexistants du dossier sans pollution FDIVERS (fix Session 1 21/04 — bug
-  // TOMETY où IKEA/Orange/Amazon étaient écrasés en FDIVERS).
-  "FOURNISSEUR_EXTERNE",
-  // Sous-alerte trace : FOURNISSEUR_EXTERNE émis alors que le cache garde-fou
-  // canonical est vide ou quasi-vide (<3 entries). Signale un dossier fraîchement
-  // onboardé où le risque de pollution par création de providers hallucinés est
-  // plus élevé. Non bloquant, sert à l'audit post-run et à la priorisation
-  // d'une revue humaine du rapport.
-  "FOURNISSEUR_EXTERNE_COLD_START",
+  // Provider Fulll introuvable côté Fulll Image (lookupOnly post chantier
+  // 01/05/2026) — le worker thor ne crée plus de provider runtime.
+  // Émise par run-saisie après resoudreOuCreerProviderImage(..., {lookupOnly:true})
+  // qui retourne null. Le builder bascule la facture en douteuse via
+  // verifierGardeFousPreMutation (provider.id vide → ERR-BUILD-05).
+  // Action user : ajouter le fournisseur dans agent_fournisseurs (UI bifrost)
+  // OU créer le provider manuellement dans Fulll, puis re-run.
+  "PROVIDER_NON_TROUVE",
+  // Routing acompte mis en stand-by chantier 01/05/2026. Le builder bascule
+  // la facture en douteuse au lieu d'appeler construirePayloadAcompteV2.
+  // Le user traite manuellement Fulll en attendant un sprint dédié acomptes
+  // post-base-saine.
+  "ACOMPTE_NON_GERE_V1",
   "INCOHERENCE_REGIME_COMPTE_INTRACOM",
   "INCOHERENCE_REGIME_COMPTE_EXTRACOM",
   "FRANCHISE_HORS_PROFIL",
