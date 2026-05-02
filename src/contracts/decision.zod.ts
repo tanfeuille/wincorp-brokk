@@ -35,6 +35,17 @@ export const ALERTES_CODES = [
   // Action user : ajouter le fournisseur dans agent_fournisseurs (UI bifrost)
   // OU créer le provider manuellement dans Fulll, puis re-run.
   "PROVIDER_NON_TROUVE",
+  // Worker a forcé fournisseur_fulll = code Fulll initial parce que ce
+  // dernier était non générique et le LLM proposait un code différent
+  // SANS justification d'override (pas d'alerte PROVIDER_FULLL_INCORRECT).
+  // Info traçabilité — le user voit dans le rapport que le décideur LLM a
+  // été ignoré au profit de Fulll initial pour ce cas.
+  "PROVIDER_FULLL_PRIORITAIRE",
+  // Le LLM juge explicitement que le code Fulll initial est faux et
+  // propose un code différent. Émise par le LLM dans `decision.alertes`
+  // quand il fait l'override (cf prompt système exception OVERRIDE).
+  // Le worker respecte la décision LLM au lieu de forcer Fulll initial.
+  "PROVIDER_FULLL_INCORRECT",
   // Routing acompte mis en stand-by chantier 01/05/2026. Le builder bascule
   // la facture en douteuse au lieu d'appeler construirePayloadAcompteV2.
   // Le user traite manuellement Fulll en attendant un sprint dédié acomptes
