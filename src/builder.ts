@@ -205,6 +205,7 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
       montantTtcTotal: ttcEffectif,
       profil,
       fournisseurNom,
+      alertes: decision.alertes,
     });
     lignesCharge = resultatTva.lignesCharge;
     lignesTvaDebit = resultatTva.lignesTvaDebit;
@@ -352,6 +353,7 @@ function calculerLignesTvaAgregees(params: {
   montantTtcTotal: number;
   profil: ProfilDossier;
   fournisseurNom: string;
+  alertes: string[];
 }): {
   lignesCharge: PurchaseFormInput["body"];
   lignesTvaDebit: PurchaseFormInput["body"];
@@ -365,11 +367,43 @@ function calculerLignesTvaAgregees(params: {
     montantTtcTotal,
     profil,
     fournisseurNom,
+    alertes,
   } = params;
   const labelCharge = fournisseurNom || "Charge";
+  // Sprint 3 (02/05/2026 — chantier 77→90%) : honorer FRANCHISE_HORS_PROFIL
+  // émise par le décideur. Quand le LLM a posé regime="franchise" mais le
+  // profil dossier n'est PAS franchise_en_base, validerRegimeTva corrige en
+  // "FR" + alerte FRANCHISE_HORS_PROFIL. Le builder honorait jusqu'ici "FR"
+  // strict → ERR-EXTRACTION-INCOMPLETE sur les factures sans bandeau TVA
+  // (cas KOUATER artisan en franchise sur DK Renov reel_normal). Le respect
+  // de l'alerte permet de comptabiliser TTC direct sans TVA déductible —
+  // semantiquement correct (fournisseur en franchise = pas de TVA collectée
+  // ni déductible).
+  //
+  // Garde-fou silent-failure-hunter (02/05) : ne JAMAIS court-circuiter
+  // franchise via FRANCHISE_HORS_PROFIL si lignes_tva contient une vraie
+  // TVA déductible — le LLM a halluciné ou s'est trompé, on perdrait
+  // silencieusement la TVA déductible (gap DGFIP + revenue loss). Force
+  // douteux pour revue humaine.
+  const franchiseViaAlerte = alertes.includes("FRANCHISE_HORS_PROFIL");
+  const aTvaReelle = (lignesTva ?? []).some(
+    (t) => typeof t.montant_tva === "number" && t.montant_tva > 0,
+  );
+  if (franchiseViaAlerte && aTvaReelle) {
+    throw new Error(
+      `ERR-FRANCHISE-CONTRADICTION : alerte FRANCHISE_HORS_PROFIL émise par ` +
+        `le décideur MAIS lignes_tva Vision contient une TVA déductible réelle ` +
+        `(${(lignesTva ?? [])
+          .filter((t) => (t.montant_tva ?? 0) > 0)
+          .map((t) => `${t.montant_tva}€ taux ${t.taux}%`)
+          .join(", ")}). Bascule douteuse pour revue humaine — risque de perte ` +
+        `silencieuse TVA déductible si traité comme franchise.`,
+    );
+  }
   const isFranchise =
     regime === "franchise" ||
-    profil.comptabilite.regime_tva === "franchise_en_base";
+    profil.comptabilite.regime_tva === "franchise_en_base" ||
+    franchiseViaAlerte;
 
   // ── Franchise : 1 ligne charge = TTC, pas de TVA (fix BUG-1) ─────────
   if (isFranchise) {

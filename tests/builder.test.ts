@@ -393,6 +393,138 @@ describe("construirePayloadV2 — régimes TVA", () => {
       ),
     ).toBe(true);
   });
+
+  it("Sprint 3 — KOUATER artisan franchise sur dossier reel_normal : FRANCHISE_HORS_PROFIL → traitement franchise", () => {
+    // Cas KOUATER LUIGI RAVALEMENT (smoke 5 DK Renov 02/05) : artisan en
+    // franchise TVA (sous-seuil), facture sans bandeau TVA car pas de TVA
+    // collectée. Décideur LLM pose regime="franchise" (signal sémantique),
+    // validerRegimeTva corrige en "FR" + alerte FRANCHISE_HORS_PROFIL car
+    // profil DK Renov est reel_normal. Le builder doit honorer cette alerte
+    // et traiter comme franchise (TTC direct, pas de TVA déductible) au
+    // lieu de jeter ERR-EXTRACTION-INCOMPLETE.
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "KOUATER LUIGI RAVALEMENT", siren: "933900730", pays: "FR" },
+        numero_piece: "18",
+        montant_ht_total: 200,
+        montant_ttc_total: 200,
+        lignes_tva: [], // VIDE (artisan en franchise, pas de bandeau TVA)
+        lignes: [
+          {
+            libelle: "Travaux ravalement chantier",
+            montant_ht: 200,
+            taux_tva: 0,
+            montant_ttc: 200,
+          },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60415000",
+        regime_tva: "FR", // Corrigé par validerRegimeTva
+        fournisseur_fulll: "FKOUATERLU",
+        libelle_ecriture: "Travaux ravalement",
+        alertes: ["FRANCHISE_HORS_PROFIL"], // Signal LLM honoré par builder
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "60415000": "R_60415000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.payload).toBeDefined();
+    // 1 ligne charge = TTC direct, AUCUNE ligne TVA déductible
+    expect(resultat.payload!.header.credit).toBe(200);
+    expect(
+      resultat.payload!.body.some(
+        (l) => l.account === "R_60415000" && l.debit === 200,
+      ),
+    ).toBe(true);
+    expect(
+      resultat.payload!.body.every(
+        (l) => !["R_44566000", "R_44566200", "R_44566300"].includes(l.account),
+      ),
+    ).toBe(true);
+  });
+
+  it("Sprint 3 garde-fou — FRANCHISE_HORS_PROFIL + lignes_tva avec TVA réelle → ERR-FRANCHISE-CONTRADICTION (douteux)", () => {
+    // Audit silent-failure-hunter (02/05) : si le LLM hallucine FRANCHISE_HORS_PROFIL
+    // sur une vraie facture FR avec TVA déductible, le builder ne doit PAS
+    // court-circuiter franchise (sinon perte silencieuse de TVA déductible →
+    // gap DGFIP + revenue loss). Force douteuse pour revue humaine.
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Marchand FR avec TVA", pays: "FR", vat: "FR12345678901" },
+        numero_piece: "F-100",
+        montant_ht_total: 1000,
+        montant_ttc_total: 1200,
+        // Vision a lu une vraie TVA — contradiction avec FRANCHISE_HORS_PROFIL
+        lignes_tva: [{ taux: 20, base_ht: 1000, montant_tva: 200 }],
+        lignes: [
+          { libelle: "Service", montant_ht: 1000, taux_tva: 20, montant_ttc: 1200 },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60120000",
+        regime_tva: "FR",
+        alertes: ["FRANCHISE_HORS_PROFIL"], // Hallucination LLM
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "60120000": "R_60120000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("douteux");
+    expect(resultat.raison).toMatch(/ERR-FRANCHISE-CONTRADICTION/);
+    expect(resultat.raison).toMatch(/200€ taux 20%/);
+  });
+
+  it("Sprint 3 — FR sans alerte + compte hors COMPTES_FALLBACK_TVA_20 reste douteux ERR-EXTRACTION-INCOMPLETE", () => {
+    // Garde-fou : le honour FRANCHISE_HORS_PROFIL ne doit PAS court-circuiter
+    // la branche FR pour les factures où le décideur n'a PAS signalé franchise.
+    // Compte 60120000 explicitement choisi car HORS COMPTES_FALLBACK_TVA_20 —
+    // sinon le fallback TVA carburant-élargi synthétise lignes_tva 20% et
+    // comptabilise (cf appliquerFallbackTvaCarburant). Sur un compte fallback,
+    // ce test passerait à comptabiliser ; c'est intentionnel et validé par
+    // les tests fallback-tva.test.ts.
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Marchand FR", pays: "FR" },
+        numero_piece: "F-002",
+        montant_ht_total: 100,
+        montant_ttc_total: 120,
+        lignes_tva: [],
+        lignes: [
+          { libelle: "Service", montant_ht: 100, taux_tva: 20, montant_ttc: 120 },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60120000",
+        regime_tva: "FR",
+        alertes: [], // Pas de FRANCHISE_HORS_PROFIL — compte 60120000 hors COMPTES_FALLBACK_TVA_20
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "60120000": "R_60120000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("douteux");
+    expect(resultat.raison).toMatch(/ERR-EXTRACTION-INCOMPLETE|ERR-BUILD-02/);
+  });
 });
 
 describe("construirePayloadV2 — court-circuits", () => {
