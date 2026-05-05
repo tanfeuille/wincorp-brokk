@@ -119,6 +119,92 @@ describe("lookupRelayId — Niveau 3 fallback aveugle (sans comptes_digits)", ()
   });
 });
 
+describe("DecisionDecideurSchema — accepte 6/7/8 chiffres pour compte_charge (Phase B v0.4.6)", () => {
+  it("accepte compte_charge 8 chiffres (cas standard)", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "62560000",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "FRESTO",
+      libelle_ecriture: "Test",
+      raisonnement: "Test",
+      confiance: 95,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).not.toThrow();
+  });
+
+  it("accepte compte_charge 6 chiffres (dossiers anciens 6 chars — Spiritus Taxi)", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "625600",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "FRESTO",
+      libelle_ecriture: "Test",
+      raisonnement: "Test",
+      confiance: 95,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).not.toThrow();
+  });
+
+  it("accepte chaîne vide (cas indéterminé)", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "",
+      libelle_ecriture: "",
+      raisonnement: "Indéterminé",
+      confiance: 30,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).not.toThrow();
+  });
+
+  it("rejette 5 chiffres (trop court)", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "62560",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "FRESTO",
+      libelle_ecriture: "Test",
+      raisonnement: "Test",
+      confiance: 95,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).toThrow();
+  });
+
+  it("rejette 9 chiffres (trop long)", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "625600000",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "FRESTO",
+      libelle_ecriture: "Test",
+      raisonnement: "Test",
+      confiance: 95,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).toThrow();
+  });
+
+  it("rejette caractères non-numériques", async () => {
+    const { parseDecision } = await import("../src/contracts/index.js");
+    const decision = {
+      compte_charge: "62560A",
+      regime_tva: "FR" as const,
+      fournisseur_fulll: "FRESTO",
+      libelle_ecriture: "Test",
+      raisonnement: "Test",
+      confiance: 95,
+      alertes: [],
+    };
+    expect(() => parseDecision(decision)).toThrow();
+  });
+});
+
 describe("lookupRelayId — Cas Spiritus Taxi run du matin (régression directe)", () => {
   it("simule les 7 comptes critiques du run raté du 05/05", () => {
     // Profil reconstruit depuis l'audit Supabase 05/05 19:30

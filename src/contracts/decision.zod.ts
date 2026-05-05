@@ -101,9 +101,15 @@ export const RegimeTvaSchema = z.enum(["FR", "intracom", "extracom", "franchise"
 export type RegimeTva = z.infer<typeof RegimeTvaSchema>;
 
 export const DecisionDecideurSchema = z.strictObject({
+  // Phase B fix v0.4.6 (05/05/2026) : accepte 6, 7 ou 8 chiffres pour
+  // supporter les dossiers en plan comptable 6 chiffres (Spiritus Taxi,
+  // EURL FLEURIET — héritage anciens clients). La normalisation effective
+  // 6↔8 selon `profil.parametres.comptes_digits` est faite en aval par
+  // `lookupRelayId` (cf src/lookup-relay-id.ts). Validation Zod laxiste car
+  // le schéma n'a pas accès au profil dossier.
   compte_charge: z
     .string()
-    .regex(/^(\d{8}|)$/, "compte_charge doit être 8 chiffres ou chaîne vide"),
+    .regex(/^(\d{6,8}|)$/, "compte_charge doit être 6 à 8 chiffres ou chaîne vide"),
   regime_tva: RegimeTvaSchema,
   fournisseur_fulll: z.string(),
   libelle_ecriture: z.string(),
