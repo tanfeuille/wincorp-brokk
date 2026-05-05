@@ -45,6 +45,9 @@ export {
 // ── Helpers divers ──────────────────────────────────────────────────
 export { similariteNomsFournisseur } from "./helpers.js";
 
+// ── Lookup tolérant relay_id (Phase B fix 05/05/2026 — dossiers 6/8 chiffres)
+export { lookupRelayId, normaliserCompte } from "./lookup-relay-id.js";
+
 // ── Contrats Zod ─────────────────────────────────────────────────────
 export {
   EmetteurSchema,

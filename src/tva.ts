@@ -13,6 +13,7 @@
 
 import type { ProfilDossier } from "./types.js";
 import { determinerRegimeTvaDepuisCompte } from "./regimes.js";
+import { lookupRelayId } from "./lookup-relay-id.js";
 
 export function calculerLignesTVA(params: {
   compteCharge: string;
@@ -34,7 +35,8 @@ export function calculerLignesTVA(params: {
   const montantTva = Math.round(montantHT * tauxTva * 100) / 100;
 
   const getRelay = (compte: string) => {
-    const relay = profil.comptes_relay_ids?.[compte];
+    // Lookup tolérant 6↔8 chiffres (Phase B fix 05/05/2026 — Spiritus Taxi).
+    const relay = lookupRelayId(profil, compte);
     if (!relay) {
       throw new Error(
         `Relay ID manquant pour compte TVA ${compte} — ERR-RELAY-TVA`,

@@ -33,6 +33,7 @@ import { calculerLignesTVA } from "./tva.js";
 import { dateVersISO as dateVersISOLib } from "./dates.js";
 import { parseExtraction, parseDecision } from "./contracts/index.js";
 import { appliquerFallbackTvaCarburant } from "./fallback-tva.js";
+import { lookupRelayId } from "./lookup-relay-id.js";
 import {
   verifierGardeFousPreMutation,
   resoudreReference,
@@ -161,7 +162,11 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   }
 
   // ── Validation relay_id compte charge ──────────────────────────────
-  const relayCharge = profil.comptes_relay_ids?.[decision.compte_charge];
+  // Lookup tolérant 6↔8 chiffres (Phase B fix 05/05/2026) : si le décideur
+  // propose 62560000 mais le profil a 625600 (cas Spiritus Taxi / EURL FLEURIET
+  // en plan comptable 6 chiffres), `lookupRelayId` normalise selon
+  // `profil.parametres.comptes_digits` puis fallback aveugle 6↔8 si absent.
+  const relayCharge = lookupRelayId(profil, decision.compte_charge);
   if (!relayCharge) {
     return {
       decision: "douteux",
@@ -533,7 +538,7 @@ function makeLigneCredit(
 }
 
 function getRelayObligatoire(profil: ProfilDossier, compte: string): string {
-  const relay = profil.comptes_relay_ids?.[compte];
+  const relay = lookupRelayId(profil, compte);
   if (!relay) {
     throw new Error(`Relay ID manquant pour compte TVA ${compte} — ERR-RELAY-TVA`);
   }
@@ -652,7 +657,7 @@ function construirePayloadAcompteV2(params: {
 
   const acompteRelay =
     ligneAcompteFulll?.accountId ??
-    profil.comptes_relay_ids?.["40910000"] ??
+    lookupRelayId(profil, "40910000") ??
     "";
   const montantAcompte =
     ligneAcompteFulll?.credit ?? ligneAcompteFulll?.debit ?? 0;
