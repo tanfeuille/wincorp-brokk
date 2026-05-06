@@ -95,6 +95,31 @@ export const ALERTES_CODES = [
   // Leclerc. Ne flip jamais `applique=true` auto (erreur transitoire,
   // pas un pattern apprenable). Session 3 (21/04/2026).
   "ISE_FULLL_OPAQUE",
+  // Sprint P0 06/05/2026 (sub-task C) — Rétrocession transport / sous-traitance
+  // sans TVA légitime. Émise par le décideur LLM quand la facture est :
+  //   * une rétrocession de course taxi en débours (art. 267 CGI),
+  //   * ou une sous-traitance avec fournisseur en franchise TVA (art. 293 B),
+  //   * ou tout autre cas légitime où l'absence de TVA déductible est attendue
+  //     ET le compte est dans la famille 6041 (sous-traitance) / 60401x.
+  // Le builder traite alors la facture en mode franchise-like : 1 ligne charge
+  // = TTC direct, aucune ligne TVA déductible. AVANT cette alerte, ces factures
+  // tombaient en `ERR-EXTRACTION-INCOMPLETE` car `lignes_tva` vide en régime FR
+  // (cas G7 SA facture 28 run Spiritus Taxi 05/05). Garde-fou silent-failure
+  // dans le builder : si lignes_tva contient une TVA réelle (>0) malgré cette
+  // alerte → ERR-FRANCHISE-CONTRADICTION (LLM s'est trompé, perte silencieuse
+  // TVA déductible évitée).
+  "TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE",
+  // Sprint P0 06/05/2026 (sub-task E) — TVA calculée par le builder depuis un
+  // taux visible sur la facture (`taux_tva_indicatif` extrait par Vision)
+  // quand le bandeau "Total HT / TVA / TTC" structuré est absent. Cas typique :
+  //   * facture manuscrite avec mention "TVA 10%" en marge (RESOTEL 5 facture
+  //     61 run Spiritus Taxi),
+  //   * facture mal rédigée avec montant TVA absent mais taux mentionné
+  //     (SARL STALER LE TEMPO facture 59 — restaurant FR taux 10%).
+  // Calcul : `tva = ttc × taux/(100+taux)`, `ht = ttc - tva` (formule
+  // inverse standard FR). Émise UNIQUEMENT par le builder via
+  // `alertes_builder` (pas par le décideur LLM). Niveau info — non bloquant.
+  "TVA_CALCULEE_DEPUIS_TAUX_VISIBLE",
 ] as const;
 
 export const RegimeTvaSchema = z.enum(["FR", "intracom", "extracom", "franchise"]);

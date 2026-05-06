@@ -187,6 +187,17 @@ export const ExtractionVisionSchema = z.strictObject({
   lignes_tva: z.array(LigneTvaSchema),
   lignes: z.array(ExtractionLigneSchema),
   indices_context: IndicesContextSchema,
+  // Sprint P0 06/05/2026 (sub-task E) — taux TVA visible sur la facture quand
+  // le bandeau "Total HT / TVA / TTC" structuré est absent OU non lu par
+  // Vision. Cas typique : facture manuscrite ou mal rédigée avec mention
+  // "TVA 10%" / "5,5%" en marge. Vision rapporte le taux ici sans synthétiser
+  // les montants ; le builder calcule HT/TVA via fallback déterministe :
+  //   tva = ttc × taux/(100+taux) ; ht = ttc - tva
+  // Borné [0..100] via tauxTvaOptionnelTolerant. Si présent ET lignes_tva
+  // vide, déclenche `appliquerFallbackTvaDepuisTaux` (cf src/fallback-tva.ts)
+  // qui synthétise lignes_tva + remonte alerte
+  // `TVA_CALCULEE_DEPUIS_TAUX_VISIBLE` via alertes_builder.
+  taux_tva_indicatif: tauxTvaOptionnelTolerant,
   // Vision retourne confiance sous forme number mais Haiku a déjà sorti des
   // strings "85" en prod. Borne [0, 100] conservée (max/min Zod).
   confiance_extraction: nombreDepuisVision.pipe(z.number().min(0).max(100)),

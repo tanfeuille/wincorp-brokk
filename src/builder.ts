@@ -32,7 +32,10 @@ import type {
 import { calculerLignesTVA } from "./tva.js";
 import { dateVersISO as dateVersISOLib } from "./dates.js";
 import { parseExtraction, parseDecision } from "./contracts/index.js";
-import { appliquerFallbackTvaCarburant } from "./fallback-tva.js";
+import {
+  appliquerFallbackTvaCarburant,
+  appliquerFallbackTvaDepuisTaux,
+} from "./fallback-tva.js";
 import { lookupRelayId } from "./lookup-relay-id.js";
 import {
   verifierGardeFousPreMutation,
@@ -136,28 +139,57 @@ export function construirePayloadV2(params: ConstruirePayloadV2Params): Resultat
   const { ttcEffectif, lignesEffectives } = appliquerForceCentime(extraction);
 
   // ── R36 : fallback TVA déterministe (ERR-BUILD-02 recovery) ─────────
-  // Si Vision a raté le bandeau TVA sur une facture FR régime normal sur
-  // l'un des comptes éligibles (carburant 60617000, marchandises 60630000,
-  // voyages 62560000, divers 62800000, fournitures 60631000), on synthétise
-  // une ligne TVA 20% déterministe. Toggle par dossier via
-  // `profil.parametres.tva_fallback_carburant` (défaut true). V2 Sprint A
-  // 28/04/2026 — généralisation depuis V1 carburant uniquement.
+  // Chaîne 2 fallbacks (Sprint A 28/04 + Sprint P0 06/05) :
+  // 1. `appliquerFallbackTvaDepuisTaux` (sub-task E) — TVA calculée depuis
+  //    `extraction.taux_tva_indicatif` (taux EXPLICITE lu par Vision) sur
+  //    tout compte FR. Couvre les taux 5.5/10/20%. Le plus précis car le
+  //    taux n'est pas inféré mais lu sur la facture (mention "TVA 10%"
+  //    en marge, factures manuscrites mal rédigées).
+  // 2. `appliquerFallbackTvaCarburant` — TVA 20% inférée sur 5 comptes
+  //    éligibles (carburant 60617000, marchandises 60630000, voyages 62560000,
+  //    divers 62800000, fournitures 60631000) quand lignes_tva vide. Le taux
+  //    20% est une hypothèse statistiquement quasi-certaine sur ces comptes,
+  //    utilisée seulement si Vision n'a pas réussi à lire un taux explicite.
+  //
+  // Order audit P0 06/05 : (1) prioritaire sur (2). Le taux explicite Vision
+  // gagne sur l'heuristique 20% car plus fiable métier. Cas typique : facture
+  // restaurant (compte 62560000 ∈ COMPTES_FALLBACK_TVA_20) avec mention
+  // "TVA 10%" → V1 calcule 10% (correct), pas V2 20% (faux). Si V1 n'applique
+  // pas (taux indicatif absent), V2 prend le relais sur les comptes éligibles.
+  // Si aucun, le builder lèvera ERR-EXTRACTION-INCOMPLETE en aval — sauf si
+  // l'alerte décideur `TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE` est posée
+  // (sub-task C, branche franchise-like dans `calculerLignesTvaAgregees`).
+  //
+  // Toggle par dossier via `profil.parametres.tva_fallback_carburant` (défaut
+  // true) — couvre les 2 fallbacks pour cohérence d'opt-out comptable.
   const fallbackActive = profil.parametres?.tva_fallback_carburant !== false;
-  const fallbackResult = appliquerFallbackTvaCarburant(
+  const fallbackTauxVisible = appliquerFallbackTvaDepuisTaux(
     extraction,
     decision,
     fallbackActive,
   );
+  const fallbackResult = fallbackTauxVisible.applique
+    ? fallbackTauxVisible
+    : appliquerFallbackTvaCarburant(
+        fallbackTauxVisible.extraction,
+        decision,
+        fallbackActive,
+      );
   const extractionFinale = fallbackResult.extraction;
   const alertesBuilder: string[] = [];
   if (fallbackResult.applique) {
-    // Alerte générique principale (Sprint A 28/04/2026 — V2 multi-comptes).
-    alertesBuilder.push("TVA_ESTIMEE_FALLBACK");
-    // Alias rétro-compat émis UNIQUEMENT pour le compte historique 60617000
-    // (carburant). Permet aux dashboards / scripts qui filtraient sur ce code
-    // (Session 2b 21/04/2026) de continuer à fonctionner sans modif.
-    if (fallbackResult.compteApplique === "60617000") {
-      alertesBuilder.push("TVA_ESTIMEE_FALLBACK_CARBURANT");
+    if (fallbackTauxVisible.applique) {
+      // Cas (1) : TVA calculée depuis taux explicite Vision (sub-task E).
+      alertesBuilder.push("TVA_CALCULEE_DEPUIS_TAUX_VISIBLE");
+    } else {
+      // Cas (2) : TVA 20% inférée sur compte éligible (heuristique).
+      alertesBuilder.push("TVA_ESTIMEE_FALLBACK");
+      // Alias rétro-compat émis UNIQUEMENT pour le compte historique 60617000
+      // (carburant). Permet aux dashboards / scripts qui filtraient sur ce code
+      // (Session 2b 21/04/2026) de continuer à fonctionner sans modif.
+      if (fallbackResult.compteApplique === "60617000") {
+        alertesBuilder.push("TVA_ESTIMEE_FALLBACK_CARBURANT");
+      }
     }
   }
 
@@ -385,18 +417,33 @@ function calculerLignesTvaAgregees(params: {
   // semantiquement correct (fournisseur en franchise = pas de TVA collectée
   // ni déductible).
   //
-  // Garde-fou silent-failure-hunter (02/05) : ne JAMAIS court-circuiter
-  // franchise via FRANCHISE_HORS_PROFIL si lignes_tva contient une vraie
-  // TVA déductible — le LLM a halluciné ou s'est trompé, on perdrait
-  // silencieusement la TVA déductible (gap DGFIP + revenue loss). Force
-  // douteux pour revue humaine.
-  const franchiseViaAlerte = alertes.includes("FRANCHISE_HORS_PROFIL");
+  // Sprint P0 06/05/2026 (sub-task C) — Élargissement à
+  // TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE : même mécanique pour les rétrocessions
+  // de course taxi en débours (art. 267 CGI) et autres cas de sous-traitance
+  // sans TVA légitime. Avant ce sprint, la facture G7 SA (run Spiritus Taxi
+  // 05/05 facture 28) tombait en ERR-EXTRACTION-INCOMPLETE car lignes_tva vide
+  // en régime FR ; désormais le builder traite TTC direct sur compte 6041xxxx
+  // (sous-traitance générale), sémantiquement correct (débours = pas de TVA
+  // déductible).
+  //
+  // Garde-fou silent-failure-hunter (02/05 + 06/05) : ne JAMAIS court-circuiter
+  // franchise via ces alertes si lignes_tva contient une vraie TVA déductible
+  // — le LLM a halluciné ou s'est trompé, on perdrait silencieusement la TVA
+  // déductible (gap DGFIP + revenue loss). Force douteux pour revue humaine.
+  const franchiseViaFranchiseHorsProfil = alertes.includes("FRANCHISE_HORS_PROFIL");
+  const franchiseViaSousTraitance = alertes.includes(
+    "TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE",
+  );
+  const franchiseViaAlerte = franchiseViaFranchiseHorsProfil || franchiseViaSousTraitance;
   const aTvaReelle = (lignesTva ?? []).some(
     (t) => typeof t.montant_tva === "number" && t.montant_tva > 0,
   );
   if (franchiseViaAlerte && aTvaReelle) {
+    const codeAlerte = franchiseViaFranchiseHorsProfil
+      ? "FRANCHISE_HORS_PROFIL"
+      : "TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE";
     throw new Error(
-      `ERR-FRANCHISE-CONTRADICTION : alerte FRANCHISE_HORS_PROFIL émise par ` +
+      `ERR-FRANCHISE-CONTRADICTION : alerte ${codeAlerte} émise par ` +
         `le décideur MAIS lignes_tva Vision contient une TVA déductible réelle ` +
         `(${(lignesTva ?? [])
           .filter((t) => (t.montant_tva ?? 0) > 0)

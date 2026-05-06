@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   appliquerFallbackTvaCarburant,
+  appliquerFallbackTvaDepuisTaux,
   COMPTES_FALLBACK_TVA_20,
 } from "../src/fallback-tva.js";
 import type { ExtractionVision, DecisionDecideur } from "../src/types.js";
@@ -618,6 +619,247 @@ describe("appliquerFallbackTvaCarburant", () => {
       );
       expect(result.applique).toBe(false);
       expect(result.compteApplique).toBeUndefined();
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Sprint P0 06/05/2026 (sub-task E) — Fallback TVA depuis taux visible
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("appliquerFallbackTvaDepuisTaux (sub-task E)", () => {
+  describe("happy path — taux FR standards 5.5/10/20", () => {
+    it("calcule HT/TVA depuis taux 10% (cas SARL STALER LE TEMPO restaurant FR TTC 16€)", () => {
+      const extraction = extractionNominale({
+        emetteur: { nom: "SARL STALER LE TEMPO" },
+        montant_ttc_total: 16,
+        taux_tva_indicatif: 10,
+        lignes: [],
+        indices_context: {},
+      });
+      const decision = decisionNominale({
+        compte_charge: "62560000",
+        fournisseur_fulll: "FRESTO",
+      });
+
+      const result = appliquerFallbackTvaDepuisTaux(extraction, decision);
+
+      expect(result.applique).toBe(true);
+      // tva = 16 × 10/110 = 1.4545... → 1.45
+      // ht  = 16 - 1.45 = 14.55
+      expect(result.extraction.lignes_tva).toEqual([
+        { taux: 10, base_ht: 14.55, montant_tva: 1.45 },
+      ]);
+    });
+
+    it("calcule HT/TVA depuis taux 10% (cas RESOTEL 5 manuscrite TTC 28€)", () => {
+      const extraction = extractionNominale({
+        emetteur: { nom: "RESOTEL 5" },
+        montant_ttc_total: 28,
+        taux_tva_indicatif: 10,
+        lignes: [],
+        indices_context: {},
+      });
+      const decision = decisionNominale({ compte_charge: "62560000" });
+
+      const result = appliquerFallbackTvaDepuisTaux(extraction, decision);
+
+      expect(result.applique).toBe(true);
+      // tva = 28 × 10/110 = 2.5454... → 2.55
+      // ht  = 28 - 2.55 = 25.45
+      expect(result.extraction.lignes_tva[0]?.taux).toBe(10);
+      expect(result.extraction.lignes_tva[0]?.montant_tva).toBe(2.55);
+      expect(result.extraction.lignes_tva[0]?.base_ht).toBe(25.45);
+    });
+
+    it("supporte taux 5.5% (épicerie / livres)", () => {
+      const result = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 21.1,
+          taux_tva_indicatif: 5.5,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({ compte_charge: "60630000" }),
+      );
+      expect(result.applique).toBe(true);
+      expect(result.extraction.lignes_tva[0]?.taux).toBe(5.5);
+      // tva = 21.1 × 5.5/105.5 = 1.099... → 1.10
+      expect(result.extraction.lignes_tva[0]?.montant_tva).toBe(1.1);
+      expect(result.extraction.lignes_tva[0]?.base_ht).toBe(20);
+    });
+
+    it("supporte taux 20% (cas générique)", () => {
+      const result = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 120,
+          taux_tva_indicatif: 20,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({ compte_charge: "62300000" }),
+      );
+      expect(result.applique).toBe(true);
+      expect(result.extraction.lignes_tva[0]).toEqual({
+        taux: 20,
+        base_ht: 100,
+        montant_tva: 20,
+      });
+    });
+
+    it("invariant arithmétique ht + tva === ttc sur plage de valeurs (taux 10%)", () => {
+      const ttcValues = [5, 10, 16, 28, 50, 99.99, 287.5];
+      for (const ttc of ttcValues) {
+        const r = appliquerFallbackTvaDepuisTaux(
+          extractionNominale({
+            montant_ttc_total: ttc,
+            taux_tva_indicatif: 10,
+            lignes: [],
+            indices_context: {},
+          }),
+          decisionNominale({ compte_charge: "62560000" }),
+        );
+        expect(r.applique).toBe(true);
+        const ht = r.extraction.lignes_tva[0]!.base_ht;
+        const tva = r.extraction.lignes_tva[0]!.montant_tva;
+        expect(Math.round((ht + tva) * 100) / 100).toBe(ttc);
+      }
+    });
+  });
+
+  describe("gates — refus du fallback", () => {
+    it("ne fait rien si fallbackActive=false", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+        }),
+        decisionNominale({ compte_charge: "62560000" }),
+        false,
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si régime intracom (autoliquidation a son propre chemin)", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+        }),
+        decisionNominale({
+          compte_charge: "60702000",
+          regime_tva: "intracom",
+        }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si régime franchise", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+        }),
+        decisionNominale({
+          compte_charge: "60740000",
+          regime_tva: "franchise",
+        }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si lignes_tva déjà non vide (jamais surécrire Vision)", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+          lignes_tva: [{ taux: 10, base_ht: 14.55, montant_tva: 1.45 }],
+        }),
+        decisionNominale({ compte_charge: "62560000" }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si taux_tva_indicatif absent", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({ montant_ttc_total: 16 }),
+        decisionNominale({ compte_charge: "62560000" }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si taux hors {5.5, 10, 20} (ex: 7%)", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 7,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({ compte_charge: "62560000" }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si TTC invalide (< 0.01)", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 0,
+          taux_tva_indicatif: 10,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({ compte_charge: "62560000" }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si alerte VAT_ETRANGER_REGIME_FR_SUSPECT", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({
+          compte_charge: "62560000",
+          alertes: ["VAT_ETRANGER_REGIME_FR_SUSPECT"],
+        }),
+      );
+      expect(r.applique).toBe(false);
+    });
+
+    it("refuse si alerte TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE (mutuellement exclusif sub-task C)", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 21.8,
+          taux_tva_indicatif: 10,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({
+          compte_charge: "60410000",
+          alertes: ["TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE"],
+        }),
+      );
+      expect(r.applique).toBe(false);
+    });
+  });
+
+  describe("compteApplique tracé", () => {
+    it("compteApplique présent ssi applique=true", () => {
+      const r = appliquerFallbackTvaDepuisTaux(
+        extractionNominale({
+          montant_ttc_total: 16,
+          taux_tva_indicatif: 10,
+          lignes: [],
+          indices_context: {},
+        }),
+        decisionNominale({ compte_charge: "62560000" }),
+      );
+      expect(r.applique).toBe(true);
+      expect(r.compteApplique).toBe("62560000");
     });
   });
 });

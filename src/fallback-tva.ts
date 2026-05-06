@@ -223,3 +223,128 @@ export function appliquerFallbackTvaCarburant(
     compteApplique: decision.compte_charge,
   };
 }
+
+/**
+ * Sprint P0 06/05/2026 (sub-task E) — Fallback TVA quand le bandeau structuré
+ * "Total HT / TVA / TTC" est absent MAIS le taux TVA est explicitement visible
+ * sur la facture (mention "TVA 10%" en marge, "5,5%" sur ligne, etc.).
+ *
+ * Vision rapporte le taux dans `extraction.taux_tva_indicatif` (cf
+ * `extraction.zod.ts` champ ajouté Sprint P0). Si ce champ est présent ET
+ * `lignes_tva` vide en régime FR, on calcule HT/TVA déductible via la formule
+ * inverse standard FR :
+ *   tva = ttc × taux/(100+taux)
+ *   ht  = ttc - tva
+ *
+ * Cas de référence (run Spiritus Taxi 05/05) :
+ *   - Facture 59 SARL STALER LE TEMPO : TTC 16€ restaurant FR taux 10%
+ *     → HT 14.55€ / TVA 1.45€
+ *   - Facture 61 RESOTEL 5 manuscrite : TTC 28€ taux 10% indiqué
+ *     → HT 25.45€ / TVA 2.55€
+ *
+ * Différence avec `appliquerFallbackTvaCarburant` (V2) :
+ *   - Pas de liste blanche compte (le taux est EXPLICITE Vision, pas inféré)
+ *   - Couvre tous les taux FR standards (5.5, 10, 20) au lieu de 20 figé
+ *   - Ne nécessite PAS de tester libellés hétérogènes (un taux explicite
+ *     sur la facture est plus fort qu'une heuristique)
+ *   - Émet `TVA_CALCULEE_DEPUIS_TAUX_VISIBLE` (générique, pas spécifique
+ *     carburant)
+ *
+ * Gates de sécurité conservées :
+ *   1. Régime FR uniquement
+ *   2. lignes_tva vide (jamais surécrire Vision)
+ *   3. taux_tva_indicatif ∈ {5.5, 10, 20} (taux FR standards uniquement)
+ *   4. TTC valide (>= 0.01 €)
+ *   5. Pas d'alerte bloquante (cf ALERTES_BLOQUANTES_FALLBACK)
+ *   6. Pas d'alerte sous-traitance (cas C — voir ci-dessous)
+ *
+ * Note Sub-task C (rétrocession) : si l'alerte
+ * `TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE` est présente, on NE doit PAS appliquer
+ * le fallback TVA (la facture est légitimement sans TVA, le builder
+ * comptabilisera TTC direct via la branche franchise-like). Ces deux
+ * sub-tasks sont mutuellement exclusives — le décideur tranche.
+ *
+ * Désactivable par dossier via `profil.parametres.tva_fallback_carburant`
+ * (le toggle existant couvre tous les fallback Vision pour cohérence
+ * d'opt-out comptable — restaurateurs avec gros volumes de tickets pas
+ * propres préfèrent revue manuelle systématique).
+ */
+const TAUX_TVA_FR_STANDARDS: ReadonlySet<number> = new Set([5.5, 10, 20]);
+
+export function appliquerFallbackTvaDepuisTaux(
+  extraction: ExtractionVision,
+  decision: DecisionDecideur,
+  fallbackActive: boolean = true,
+): FallbackTvaResult {
+  if (!fallbackActive) return { extraction, applique: false };
+
+  // Gate 1 : régime FR uniquement
+  if (decision.regime_tva !== "FR") return { extraction, applique: false };
+
+  // Gate 2 : lignes_tva vide (jamais surécrire une extraction Vision réussie).
+  const lignesUtilisables = (extraction.lignes_tva ?? []).filter(
+    (l) =>
+      typeof l.base_ht === "number" &&
+      l.base_ht > 0 &&
+      typeof l.montant_tva === "number" &&
+      typeof l.taux === "number",
+  );
+  if (lignesUtilisables.length > 0) return { extraction, applique: false };
+
+  // Gate 3 : taux_tva_indicatif présent ET dans les taux FR standards
+  const taux = extraction.taux_tva_indicatif;
+  if (typeof taux !== "number" || !TAUX_TVA_FR_STANDARDS.has(taux)) {
+    return { extraction, applique: false };
+  }
+
+  // Gate 4 : TTC valide
+  const ttc = extraction.montant_ttc_total;
+  if (typeof ttc !== "number" || !Number.isFinite(ttc) || ttc < 0.01) {
+    return { extraction, applique: false };
+  }
+
+  // Gate 5 : alertes bloquantes existantes (TVA étrangère suspecte, compte
+  // hors profil — signaux d'incertitude décideur).
+  if (decision.alertes.some((a) => ALERTES_BLOQUANTES_FALLBACK.has(a))) {
+    return { extraction, applique: false };
+  }
+
+  // Gate 6 : alerte sous-traitance exclue — la branche franchise-like du
+  // builder traite déjà ce cas en TTC direct. Appliquer le fallback TVA
+  // créerait une TVA déductible fictive sur ce qui est légitimement sans TVA.
+  if (decision.alertes.includes("TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE")) {
+    return { extraction, applique: false };
+  }
+
+  // Calcul TVA depuis taux : formule inverse FR.
+  const tva = round2((ttc * taux) / (100 + taux));
+  const ht = round2(ttc - tva);
+
+  // Invariant : ht + tva doit re-donner ttc (safety net arrondi).
+  if (round2(ht + tva) !== round2(ttc)) {
+    return { extraction, applique: false };
+  }
+
+  // Si la TVA calculée est < 0.01€ (cas TTC très petit), pas d'injection
+  // (éviterait une ligne TVA à 0 qui fait échouer Fulll).
+  if (tva < 0.01) {
+    return { extraction, applique: false };
+  }
+
+  const extractionEnrichie: ExtractionVision = {
+    ...extraction,
+    lignes_tva: [
+      {
+        taux,
+        base_ht: ht,
+        montant_tva: tva,
+      },
+    ],
+  };
+
+  return {
+    extraction: extractionEnrichie,
+    applique: true,
+    compteApplique: decision.compte_charge,
+  };
+}

@@ -207,6 +207,13 @@ export interface ExtractionVision {
   }>;
   lignes: ExtractionLigne[];
   indices_context: IndicesContext;
+  /**
+   * Sprint P0 06/05/2026 (sub-task E) — Taux TVA visible sur la facture
+   * (mention "TVA 10%" en marge, etc.) quand le bandeau structuré est absent.
+   * Si présent ET `lignes_tva` vide en régime FR, le builder synthétise les
+   * lignes via `appliquerFallbackTvaDepuisTaux` (fallback-tva.ts).
+   */
+  taux_tva_indicatif?: number;
   confiance_extraction: number;
   meta: {
     modele_utilise: "haiku" | "sonnet" | "skipped";

@@ -23,6 +23,11 @@ export {
   // (carburant + marchandises + voyages + divers + fournitures), le nom
   // historique reste exporté pour rétro-compat des callers existants.
   appliquerFallbackTvaCarburant as appliquerFallbackTva,
+  // Sprint P0 06/05/2026 (sub-task E) — fallback complémentaire quand Vision
+  // a lu un taux explicite (`extraction.taux_tva_indicatif`) sans bandeau
+  // structuré. Couvre les taux FR standards (5.5, 10, 20). Mutuellement
+  // exclusif avec `TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE` (cas C).
+  appliquerFallbackTvaDepuisTaux,
   COMPTES_FALLBACK_TVA_20,
   COMPTES_RISQUE_MIX_TAUX,
   type FallbackTvaResult,

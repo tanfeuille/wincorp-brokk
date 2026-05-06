@@ -525,6 +525,272 @@ describe("construirePayloadV2 — régimes TVA", () => {
     expect(resultat.decision).toBe("douteux");
     expect(resultat.raison).toMatch(/ERR-EXTRACTION-INCOMPLETE|ERR-BUILD-02/);
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  // Sprint P0 06/05/2026 (sub-task C) — Rétrocession transport sans TVA
+  // ════════════════════════════════════════════════════════════════════
+
+  it("Sprint P0 sub-task C — G7 SA rétrocession course taxi débours art.267 → traitement franchise-like", () => {
+    // Cas G7 SA (run Spiritus Taxi 05/05 facture 28) : facture de
+    // rétrocession course taxi en débours (art. 267 CGI), TVA absente
+    // légitime. Avant Sprint P0, tombait en ERR-EXTRACTION-INCOMPLETE car
+    // lignes_tva vide en régime FR. Décideur LLM pose désormais alerte
+    // TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE → builder traite TTC direct sur
+    // compte 60410000 (sous-traitance) sans TVA déductible.
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "G7 SA", siren: "324379866", vat: "FR07324379866", pays: "FR" },
+        numero_piece: "G7-2026-001",
+        montant_ht_total: 21.8,
+        montant_ttc_total: 21.8,
+        lignes_tva: [], // VIDE (débours art.267 CGI, pas de TVA déductible)
+        lignes: [
+          {
+            libelle: "Course taxi - rétrocession débours art.267",
+            montant_ht: 21.8,
+            taux_tva: 0,
+            montant_ttc: 21.8,
+          },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60410000",
+        regime_tva: "FR",
+        fournisseur_fulll: "FTAXISD",
+        libelle_ecriture: "G7 retrocession course",
+        alertes: ["TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE"],
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "60410000": "R_60410000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.payload).toBeDefined();
+    // 1 ligne charge = TTC direct, AUCUNE ligne TVA déductible
+    expect(resultat.payload!.header.credit).toBe(21.8);
+    expect(
+      resultat.payload!.body.some(
+        (l) => l.account === "R_60410000" && l.debit === 21.8,
+      ),
+    ).toBe(true);
+    expect(
+      resultat.payload!.body.every(
+        (l) => !["R_44566000", "R_44566200", "R_44566300"].includes(l.account),
+      ),
+    ).toBe(true);
+  });
+
+  it("Sprint P0 sub-task C — TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE + lignes_tva avec TVA réelle → ERR-FRANCHISE-CONTRADICTION (douteux)", () => {
+    // Garde-fou silent-failure-hunter : si le LLM hallucine l'alerte
+    // sous-traitance sur une facture FR avec vraie TVA déductible, le
+    // builder ne doit PAS court-circuiter franchise (sinon perte
+    // silencieuse TVA déductible — gap DGFIP).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Faux débours avec TVA", pays: "FR", vat: "FR12345678901" },
+        numero_piece: "F-200",
+        montant_ht_total: 100,
+        montant_ttc_total: 120,
+        lignes_tva: [{ taux: 20, base_ht: 100, montant_tva: 20 }],
+        lignes: [
+          { libelle: "Pseudo débours", montant_ht: 100, taux_tva: 20, montant_ttc: 120 },
+        ],
+      }),
+      decision: decisionNominale({
+        compte_charge: "60410000",
+        regime_tva: "FR",
+        alertes: ["TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE"], // Hallucination LLM
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "60410000": "R_60410000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("douteux");
+    expect(resultat.raison).toMatch(/ERR-FRANCHISE-CONTRADICTION/);
+    expect(resultat.raison).toMatch(/TVA_ABSENTE_LEGITIME_SOUS_TRAITANCE/);
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  // Sprint P0 06/05/2026 (sub-task E) — Fallback TVA depuis taux visible
+  // ════════════════════════════════════════════════════════════════════
+
+  it("Sprint P0 sub-task E — RESOTEL 5 manuscrite TTC 28€ taux 10% indicatif → fallback synthétise lignes_tva", () => {
+    // Cas RESOTEL 5 (run Spiritus Taxi 05/05 facture 61) : facture
+    // manuscrite avec mention "TVA 10%" en marge mais pas de bandeau
+    // structuré. Vision rapporte taux_tva_indicatif=10. Le builder
+    // chaîne fallback V2 carburant (5 comptes éligibles, le compte 62560000
+    // EST dans la liste donc V2 applique d'abord à 20% — ce test choisit
+    // un compte HORS V2 pour valider que E prend le relais).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "RESOTEL 5", pays: "FR" },
+        numero_piece: "RESOTEL-001",
+        montant_ht_total: 25.45,
+        montant_ttc_total: 28,
+        lignes_tva: [], // VIDE (facture manuscrite mal rédigée)
+        taux_tva_indicatif: 10,
+        lignes: [],
+        indices_context: {},
+      }),
+      decision: decisionNominale({
+        compte_charge: "61570000", // hors COMPTES_FALLBACK_TVA_20 → V2 ne s'applique pas
+        regime_tva: "FR",
+        fournisseur_fulll: "FRESTAURA",
+        libelle_ecriture: "RESOTEL repas",
+        alertes: [],
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "61570000": "R_61570000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.payload).toBeDefined();
+    // HT 25.45 + TVA 2.55 = 28 TTC
+    expect(resultat.payload!.header.credit).toBe(28);
+    expect(
+      resultat.payload!.body.some(
+        (l) => l.account === "R_61570000" && l.debit === 25.45,
+      ),
+    ).toBe(true);
+    expect(
+      resultat.payload!.body.some(
+        (l) => l.account === "R_44566000" && l.debit === 2.55,
+      ),
+    ).toBe(true);
+  });
+
+  it("Sprint P0 sub-task E — taux explicite Vision (10%) prime sur heuristique V1 20% même sur compte éligible (62560000)", () => {
+    // Cas où les 2 fallbacks pourraient s'appliquer : compte 62560000 ∈
+    // COMPTES_FALLBACK_TVA_20 + taux_tva_indicatif=10 (FR standard).
+    // Comportement attendu (audit P0 06/05) : fallback E (taux explicite)
+    // gagne car plus fiable métier. V1 heuristique 20% est skipé. Alerte
+    // TVA_CALCULEE_DEPUIS_TAUX_VISIBLE émise. Cas réel : facture restaurant
+    // sur compte mission 62560000 où le taux 10% lu par Vision est correct
+    // — l'application aveugle de 20% serait une SURÉVALUATION TVA déductible
+    // (faux comptablement).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Repas mission", pays: "FR" },
+        numero_piece: "TEST-MIX",
+        montant_ttc_total: 16,
+        lignes_tva: [],
+        taux_tva_indicatif: 10, // prioritaire sur l'heuristique V1
+        lignes: [],
+        indices_context: {},
+      }),
+      decision: decisionNominale({
+        compte_charge: "62560000",
+        regime_tva: "FR",
+        fournisseur_fulll: "FRESTO",
+        alertes: [],
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "62560000": "R_62560000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.alertes_builder).toContain("TVA_CALCULEE_DEPUIS_TAUX_VISIBLE");
+    expect(resultat.alertes_builder).not.toContain("TVA_ESTIMEE_FALLBACK");
+    // Vérification du calcul : tva = 16×10/110 = 1.45, ht = 14.55
+    expect(resultat.payload!.body.some(
+      (l) => l.account === "R_62560000" && l.debit === 14.55,
+    )).toBe(true);
+    expect(resultat.payload!.body.some(
+      (l) => l.account === "R_44566000" && l.debit === 1.45,
+    )).toBe(true);
+  });
+
+  it("Sprint P0 sub-task E — V1 heuristique 20% reprend le relais quand taux_tva_indicatif absent (compte carburant 60617000)", () => {
+    // Cas nominal V1 : pas de taux_tva_indicatif, compte ∈ COMPTES_FALLBACK_TVA_20
+    // → fallback heuristique 20% s'applique (cas tickets carburant typique).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Total", pays: "FR" },
+        numero_piece: "CARB-001",
+        montant_ttc_total: 60,
+        lignes_tva: [],
+        // Pas de taux_tva_indicatif
+        lignes: [
+          { libelle: "SP95 30L", quantite: 30, montant_ht: 50, taux_tva: 20, montant_ttc: 60 },
+        ],
+        indices_context: {
+          carburant: { type: "essence", litres: 30 },
+        },
+      }),
+      decision: decisionNominale({
+        compte_charge: "60617000",
+        regime_tva: "FR",
+        fournisseur_fulll: "FCARBURANT",
+        alertes: [],
+      }),
+      profil: profilDidierQuentin(),
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.decision).toBe("comptabiliser");
+    expect(resultat.alertes_builder).toContain("TVA_ESTIMEE_FALLBACK");
+    expect(resultat.alertes_builder).toContain("TVA_ESTIMEE_FALLBACK_CARBURANT");
+    expect(resultat.alertes_builder).not.toContain(
+      "TVA_CALCULEE_DEPUIS_TAUX_VISIBLE",
+    );
+  });
+
+  it("Sprint P0 sub-task E — alerte TVA_CALCULEE_DEPUIS_TAUX_VISIBLE émise via alertes_builder", () => {
+    // Confirme que l'alerte spécifique sub-task E est bien remontée pour
+    // les dashboards et l'audit DGFIP (art. L.102 B LPF — toute synthèse
+    // de TVA déductible doit être tracée).
+    const resultat = construirePayloadV2({
+      facture: factureMinimale(),
+      extraction: extractionNominale({
+        emetteur: { nom: "Manuscrite", pays: "FR" },
+        numero_piece: "MANUS-001",
+        montant_ttc_total: 28,
+        lignes_tva: [],
+        taux_tva_indicatif: 10,
+        lignes: [],
+        indices_context: {},
+      }),
+      decision: decisionNominale({
+        compte_charge: "61570000", // hors V2
+        regime_tva: "FR",
+        alertes: [],
+      }),
+      profil: {
+        ...profilDidierQuentin(),
+        comptes_relay_ids: {
+          ...profilDidierQuentin().comptes_relay_ids!,
+          "61570000": "R_61570000",
+        },
+      },
+      bookRelayId: "Qm9vazoyMTcxMDI2",
+    });
+    expect(resultat.alertes_builder).toContain("TVA_CALCULEE_DEPUIS_TAUX_VISIBLE");
+    expect(resultat.alertes_builder).not.toContain("TVA_ESTIMEE_FALLBACK");
+  });
 });
 
 describe("construirePayloadV2 — court-circuits", () => {
