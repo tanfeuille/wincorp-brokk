@@ -120,6 +120,19 @@ export const ALERTES_CODES = [
   // inverse standard FR). Émise UNIQUEMENT par le builder via
   // `alertes_builder` (pas par le décideur LLM). Niveau info — non bloquant.
   "TVA_CALCULEE_DEPUIS_TAUX_VISIBLE",
+  // Sprint 11/05/2026 (bug INDIGO Parking — cf project_bug_decideur_indigo_parking
+  // _2026_05_08). Override déterministe post-LLM sur émetteurs parking explicites
+  // (INDIGO, EFFIA, Q-PARK, SAEMES, VINCI Park, APCOA, etc.) OU libellés
+  // "parking/stationnement/horodateur" sans exclusion garage/réparation.
+  // Force `compte_charge=62510000` (Voyages et déplacements) en régime FR.
+  // Cas de référence : session #9 TRIMAT 18/04 — INDIGO PARKING GARE DE LYON
+  // 13.15€ classée par erreur en 60630000 (62% confiance Haiku) alors qu'un
+  // parking est par nature un déplacement, jamais des achats fournitures.
+  // Émise UNIQUEMENT par `appliquerOverrideParkingFR` (cf decideur-overrides.ts).
+  // Mutuellement exclusive avec les autres comptes parking — c'est un overlay
+  // post-LLM, pas une alerte LLM. Niveau info (non bloquant) — traçabilité
+  // audit DGFIP (art. L.102 B LPF) en complément de raisonnement enrichi.
+  "COMPTE_FORCE_PARKING_62510000",
 ] as const;
 
 export const RegimeTvaSchema = z.enum(["FR", "intracom", "extracom", "franchise"]);

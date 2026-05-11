@@ -39,6 +39,20 @@ export {
   type GardeFousResult,
 } from "./pre-mutation-guards.js";
 
+// ── Overrides déterministes post-LLM (filet anti-récidive) ──────────
+// Sprint 11/05/2026 — bug INDIGO Parking (cf project_bug_decideur_indigo_parking_2026_05_08).
+// Force compte_charge=62510000 sur émetteurs parking explicites (INDIGO, EFFIA,
+// Q-PARK, SAEMES, VINCI Park, APCOA, ONEPARK, ZENPARK, INTERPARKING, YESPARK)
+// OU libellés parking/stationnement/horodateur/péage/autoroute (filet redondant
+// au prompt LLM Sprint P0). Exclusion garage/réparation auto pour éviter faux
+// positifs. Émet alerte typée COMPTE_FORCE_PARKING_62510000 + raisonnement
+// préfixé pour traçabilité audit DGFIP art. L.102 B LPF.
+export {
+  appliquerOverrideParkingFR,
+  EMETTEURS_PARKING_EXPLICITES,
+  type OverrideParkingResult,
+} from "./decideur-overrides.js";
+
 // ── Helpers dates ────────────────────────────────────────────────────
 export {
   dateVersISO,
